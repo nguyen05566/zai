@@ -1580,9 +1580,16 @@ class JieqiCupBot:
             self._thinking = False
 
     def _do_auto_move(self):
-        if not self.engine or not self.engine.alive():
-            print("[ENGINE] ❌ Engine not alive")
+        if not self.engine:
+            print("[ENGINE] ❌ Không có engine")
             return
+        if not self.engine.alive():
+            # ★ FIX: engine chết giữa các nước → restart ngay thay vì bỏ lượt vĩnh viễn
+            print("[ENGINE] ❌ Engine chết giữa ván — thử restart...", flush=True)
+            if not self.engine.restart():
+                print("[ENGINE] ❌ Restart thất bại — bỏ lượt", flush=True)
+                return
+            print("[ENGINE] ✅ Restart OK — đi tiếp", flush=True)
 
         now = time.time()
         deadline = self._turn_deadline if self._turn_deadline > 0 else (now + MOVE_DEADLINE_SECONDS)
