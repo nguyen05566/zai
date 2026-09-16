@@ -1,0 +1,43 @@
+name: Cờ Úp Bot (PikaJieQi)
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Chạy mỗi 6 giờ
+  workflow_dispatch:  # Cho phép chạy thủ công
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # 5h 50min (GHA max 6h)
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install Python dependencies
+      run: |
+        pip install websocket-client requests
+    
+    - name: Build PikaJieQi engine
+      run: |
+        bash build_engine.sh
+    
+    - name: Verify engine
+      run: |
+        echo "uci" | ./pikajieqi-native | head -3
+        echo "---"
+        ls -la pikajieqi-native pikafish.nnue
+    
+    - name: Run cup bot
+      env:
+        CARO_USER19: ${{ secrets.CARO_USER19 }}
+        CARO_PASSWD19: ${{ secrets.CARO_PASSWD19 }}
+      run: |
+        # Use env vars if set, otherwise defaults in script
+        python3 -u cup_bot_jieqi.py
+      timeout-minutes: 340
