@@ -3,7 +3,7 @@ cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (cppjieqi) thay cho PKJQ
 
 Khác biệt vs cup_bot.py:
   - Engine: pikajieqi-native (C++ native, không cần wine)
-  - Movetime: 5000ms (Jieqi cần nhiều thời gian hơn PKJQ)
+  - Movetime: 2000ms (~2s/nước cho nhanh)
   - Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork-and-think)
   - BAG updates: gửi kèm moves list để Jieqi sync state
 """
@@ -125,10 +125,11 @@ MIN_MOVE_SECONDS = 2.0
 MOVE_DEADLINE_SECONDS = 30.0
 MAX_SAFE_MOVES = 250
 TRUST_ENGINE_AFTER = 100
-MAX_ENGINE_RESTARTS_PER_GAME = 1
+MAX_ENGINE_RESTARTS_PER_GAME = 2  # mỗi ván được restart engine tối đa 2 lần (reset lại quota đầu mỗi ván)
 MOVE_DEDUP_WINDOW = 0.1
 KICK_MODE = "when_lose"
 KICK_DELAY = 5.0
+SIT_ALONE_TIMEOUT = 300.0  # ngồi chờ đối thủ trong bàn tối đa 5 phút rồi mới rời bàn
 BOT_BET_XU = 20000
 BOT_USE_CREATE_TABLE = True
 BOT_MATCH_DURATION = '5'
@@ -730,7 +731,7 @@ class JieqiEngine:
         self._init_engine()
         return self.alive()
 
-    def get_best_move(self, fen, moves, movetime_ms=5000):
+    def get_best_move(self, fen, moves, movetime_ms=2000):
         """Send position + go infinite, wait movetime, then stop.
         
         PikaJieQi native engine:
@@ -1229,7 +1230,7 @@ class JieqiCupBot:
                                          daemon=True).start()
                 else:
                     if not self.board.is_playing and self.opponent_player_id() is None:
-                        print("[TABLE] No opponent, waiting 30s...")
+                        print(f"[TABLE] No opponent, waiting {int(SIT_ALONE_TIMEOUT)}s...")
                         self._sit_alone_since = time.time()
         except Exception:
             pass
@@ -1237,6 +1238,9 @@ class JieqiCupBot:
     def _handle_start_match(self, msg):
         self._game_seq += 1
         print(f"[GAME] 🎮 Match #{self._game_seq}")
+        # Cấp lại quota restart engine cho ván mới (chỉ reset counter, tốn ~0 thời gian)
+        if self.engine and hasattr(self.engine, "_restart_count"):
+            self.engine._restart_count = 0
         self._thinking = False
         self._played_this_turn = False
         self._turn_started_at = 0.0
@@ -1587,9 +1591,9 @@ class JieqiCupBot:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
 
-        # Movetime: use 5s for Jieqi (it's slower than PKJQ)
-        # But cap to leave time for fallback
-        movetime_ms = min(5000, int((remain - 3.0) * 1000))
+        # Movetime: 2s/move — engine nghĩ nhanh hơn (depth thấp hơn chút)
+        # Cap để còn thời gian fallback nếu bị reject
+        movetime_ms = min(2000, int((remain - 3.0) * 1000))
         if movetime_ms < 1500:
             movetime_ms = max(1500, int(remain * 500))
 
@@ -1711,7 +1715,7 @@ class JieqiCupBot:
                                 self._sit_alone_since = time.time()
                             else:
                                 elapsed = time.time() - self._sit_alone_since
-                                if elapsed >= 30.0:
+                                if elapsed >= SIT_ALONE_TIMEOUT:
                                     print(f"[TABLE] Chờ {int(elapsed)}s -> rời bàn")
                                     self.leave_table()
                         else:
