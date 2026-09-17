@@ -643,6 +643,7 @@ class JieqiEngine:
         self._pondering = False       # ★ PONDER: process mới → hết trạng thái ponder
         self._ponder_moves = None
         self._ponder_pred = None
+        self._ponder_fen = None
         if self.proc:
             try:
                 self.proc.stdin.write("quit\n")
@@ -887,6 +888,49 @@ class JieqiEngine:
                 return
             time.sleep(0.02)
 
+    def ponderhit_consistent(self, real_move):
+        """★ PONDER-SAFE: nước đối thủ THẬT (kèm suffix reveal) có nhất quán với
+        giả định của ponder không?
+
+        Engine ponder trên nước dự đoán KHÔNG có suffix → phỏng đoán loại quân
+        theo ô chuẩn. Nếu nước thật có reveal khác phỏng đoán (vd d0e1C: engine
+        phỏng d0 là Sĩ, thật là Pháo) thì thế engine đang search KHÁC thế thật
+        → bestmove có thể bất hợp pháp ('General threatened') hoặc chất lượng
+        tệ. Khi đó phải bỏ ponderhit, search lại với FEN đúng.
+        """
+        try:
+            fen = self._ponder_fen
+            if not fen or len(real_move) < 4:
+                return False
+            frm = (ord(real_move[0]) - 97, int(real_move[1]))
+            piece = None
+            r = 9
+            for row in fen.split(' ')[0].split('/'):
+                f = 0
+                for ch in row:
+                    if ch.isdigit():
+                        f += int(ch)
+                    else:
+                        if (f, r) == frm:
+                            piece = ch
+                        f += 1
+                r -= 1
+            if piece is None:
+                return False            # ô nguồn trống theo FEN → lệch vị trí
+            if len(real_move) > 4:      # nước thật CÓ reveal
+                rev = real_move[4]
+                if piece in ('X', 'x'):
+                    presumed = PRESUMED_STD.get(frm)
+                    if not presumed:
+                        return False    # ô không chuẩn — không biết engine nghĩ gì
+                    presumed = presumed.upper() if piece == 'X' else presumed.lower()
+                    return presumed == rev   # khớp phỏng đoán → thế engine đúng
+                return piece == rev     # quân đã lộ từ trước → engine biết chính xác
+            # nước thật KHÔNG reveal → chỉ nhất quán khi quân đã lộ (engine biết)
+            return piece not in ('X', 'x')
+        except Exception:
+            return False
+
     def start_ponder(self, moves, predicted, fen=None):
         """Search sẵn vị trí SAU nước dự đoán của đối thủ (go ponder infinite)."""
         if not self.alive() or self._engine_searching:
@@ -896,6 +940,7 @@ class JieqiEngine:
         self._pondering = True
         self._ponder_pred = predicted[:4]
         self._ponder_moves = list(moves) + [predicted]
+        self._ponder_fen = fen        # ★ vị trí TRƯỚC nước dự đoán (đối chiếu reveal)
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
@@ -913,6 +958,7 @@ class JieqiEngine:
             self._pondering = False
             self._ponder_moves = None
             self._ponder_pred = None
+            self._ponder_fen = None
             self._engine_searching = False
             return False
         return True
@@ -951,6 +997,7 @@ class JieqiEngine:
         self._engine_searching = False
         self._ponder_moves = None
         self._ponder_pred = None
+        self._ponder_fen = None
 
     def ponderhit(self, movetime_ms):
         """Đối thủ đi ĐÚNG dự đoán → chuyển sang search bình thường, trả bestmove."""
@@ -998,6 +1045,7 @@ class JieqiEngine:
         self._engine_searching = False
         self._ponder_moves = None
         self._ponder_pred = None
+        self._ponder_fen = None
         self._drain_idle()   # chờ engine nhàn trước khi fallback search thường
         return None
 
@@ -1792,15 +1840,23 @@ class JieqiCupBot:
               flush=True)
 
         # ★ PONDER: đối thủ đi ĐÚNG nước dự đoán → ponderhit (tận dụng search sẵn)
+        # ★ PONDER-SAFE: chỉ khi reveal của nước thật KHỚP giả định của ponder
+        # (nước dự đoán không suffix → engine phỏng đoán loại theo ô chuẩn; nếu
+        # reveal khác, thế engine đang search khác thế thật → bestmove có thể
+        # bất hợp pháp 'General threatened' — log n17 #8, nước d0e1C)
         raw = None
         try:
             if (self.engine._pondering and self.engine._ponder_moves is not None
                     and len(moves) >= 2
                     and moves[:-1] == self.engine._ponder_moves[:-1]
                     and moves[-1][:4] == self.engine._ponder_pred):
-                print(f"[PONDER] ⚡ Đoán đúng nước đối thủ ({self.engine._ponder_pred}) "
-                      f"— ponderhit!", flush=True)
-                raw = self.engine.ponderhit(movetime_ms)
+                if self.engine.ponderhit_consistent(moves[-1]):
+                    print(f"[PONDER] ⚡ Đoán đúng nước đối thủ ({self.engine._ponder_pred}) "
+                          f"— ponderhit!", flush=True)
+                    raw = self.engine.ponderhit(movetime_ms)
+                else:
+                    print(f"[PONDER] ⚠️ Đúng tọa độ nhưng reveal khác phỏng đoán "
+                          f"({moves[-1]}) — bỏ ponderhit, search lại thế thật", flush=True)
         except Exception as e:
             print(f"[PONDER] ponderhit lỗi ({e}) — fallback search thường", flush=True)
             raw = None
