@@ -1554,13 +1554,16 @@ class JieqiCupBot:
             is_guest = not getattr(self, '_table_created_by_me', False)
             if bot_lost:
                 if victim and not is_guest:
+                    print(f"[GAME] Lost -> kick opponent (pid={victim})")
                     time.sleep(KICK_DELAY)
                     if self.connected and not self.board.is_playing:
                         self.send_kick_player(victim); time.sleep(2.0)
                 elif is_guest:
                     print("[GAME] Guest -> no kick")
-                print("[GAME] Lost -> leave")
-                time.sleep(1.0); self.leave_table()
+                # ★ STAY at table after losing (don't leave)
+                # Wait for new opponent to join
+                print("[GAME] Lost -> stay at table, send ready")
+                time.sleep(3.0); self.send_ready(1)
             else:
                 print("[GAME] Win/Draw -> stay")
                 time.sleep(3.0); self.send_ready(1)
