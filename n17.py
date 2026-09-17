@@ -89,7 +89,7 @@ class _UrllibSession:
 requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
-CARO_USER_DIRECT = "nguyen17"
+CARO_USER_DIRECT = "nguyen14"
 CARO_PASSWD_DIRECT = "******"
 
 
