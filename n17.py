@@ -120,10 +120,10 @@ PIKAJIEQI_BINARY_CANDIDATES = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
 ]
 
-ENGINE_MULTIPV = 1
-MIN_MOVE_SECONDS = 2.0
+ENGINE_MULTIPV = 3
+MIN_MOVE_SECONDS = 3.0
 MOVE_DEADLINE_SECONDS = 30.0
-MAX_SAFE_MOVES = 250
+MAX_SAFE_MOVES = 25
 TRUST_ENGINE_AFTER = 100
 MAX_ENGINE_RESTARTS_PER_GAME = 2  # mỗi ván được restart engine tối đa 2 lần (reset lại quota đầu mỗi ván)
 MOVE_DEDUP_WINDOW = 0.1
