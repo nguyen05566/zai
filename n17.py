@@ -783,7 +783,7 @@ class JieqiEngine:
         self._init_engine()
         return self.alive()
 
-    def get_best_move(self, fen, moves, movetime_ms=2000):
+    def get_best_move(self, fen, moves, movetime_ms=3000):
         """Send position + go infinite, wait movetime, then stop.
         
         PikaJieQi native engine:
@@ -1823,15 +1823,15 @@ class JieqiCupBot:
         now = time.time()
         deadline = self._turn_deadline if self._turn_deadline > 0 else (now + MOVE_DEADLINE_SECONDS)
         remain = deadline - now
-        if remain < 4.0:
+        if remain < 0:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
 
         # Movetime: 2s/move — engine nghĩ nhanh hơn (depth thấp hơn chút)
         # Cap để còn thời gian fallback nếu bị reject
-        movetime_ms = min(2000, int((remain - 3.0) * 1000))
-        if movetime_ms < 1500:
-            movetime_ms = max(1500, int(remain * 500))
+        movetime_ms = min(3000, int((remain - 3.0) * 1000))
+        if movetime_ms < 2500:
+            movetime_ms = max(2500, int(remain * 500))
 
         fen, moves = self.board.get_current_fen()
 
