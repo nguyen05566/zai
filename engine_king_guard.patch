@@ -1,0 +1,50 @@
+--- a/src/movegen.cpp
++++ b/src/movegen.cpp
+@@ -60,7 +60,17 @@
+                               : pos.check_squares(Pt);
+ 
+         while (b)
+-            *moveList++ = make_move(from, pop_lsb(b));
++        {
++            Square to = pop_lsb(b);
++            // KING-GUARD: never generate a king capture. On dark-chess
++            // "phantom check" positions (an unrevealed piece is presumed to
++            // attack the opponent king) the side to move may appear able to
++            // capture the king; executing such a move corrupts the position
++            // (assert `type_of(captured) != KING` / crash).
++            if (type_of(pos.piece_on(to)) == KING)
++                continue;
++            *moveList++ = make_move(from, to);
++        }
+     }
+ 
+     return moveList;
+@@ -95,7 +105,12 @@
+             b &= ~attacks_bb<ROOK>(pos.square<KING>(~Us));
+ 
+         while (b)
+-            *moveList++ = make_move(ksq, pop_lsb(b));
++        {
++            Square to = pop_lsb(b);
++            if (type_of(pos.piece_on(to)) == KING)   // KING-GUARD
++                continue;
++            *moveList++ = make_move(ksq, to);
++        }
+     }
+ 
+     return moveList;
+--- a/src/position.cpp
++++ b/src/position.cpp
+@@ -443,6 +443,12 @@
+ 
+   assert(is_ok(m));
+ 
++  // KING-GUARD: reject any move that captures a king (can reach here via
++  // transposition-table / exclusion-move validation on phantom-check
++  // positions where a king appears capturable).
++  if (type_of(piece_on(to_sq(m))) == KING)
++      return false;
++
+   Color us = sideToMove;
+   Square from = from_sq(m);
+   Square to = to_sq(m);

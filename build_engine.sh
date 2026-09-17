@@ -12,6 +12,14 @@ cd /tmp/pikafish-jieqi
 git checkout "$REF"
 echo "Checked out: $(git rev-parse HEAD)"
 
+# ★ KING-GUARD: vá engine không sinh/không nhận nước ĂN VUA.
+# Trên thế cờ úp, quân úp được phỏng đoán loại theo ô chuẩn — khi phỏng đoán
+# sai có thể tạo "chiếu bóng" (vua đối thủ tưởng đang bị chiếu) → search sinh
+# nước ăn vua → crash engine (assert type_of(captured) != KING) → bot chết
+# giữa ván, hết quota restart. Chi tiết: engine_king_guard.patch
+git apply "$SCRIPT_DIR/engine_king_guard.patch"
+echo "Applied engine_king_guard.patch"
+
 # Build
 cd src
 make -j$(nproc) ARCH=x86-64-sse41-popcnt build
