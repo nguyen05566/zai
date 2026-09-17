@@ -235,43 +235,8 @@ def is_block_software_message(raw_bytes):
     return False
 
 
-ACTIVE_TABLES_FILE = os.path.join(tempfile.gettempdir(), "zaro_active_tables.json")
-
-
-def get_active_bot_tables():
-    try:
-        if not os.path.exists(ACTIVE_TABLES_FILE): return {}
-        with open(ACTIVE_TABLES_FILE, 'r') as f:
-            content = f.read().strip()
-            if not content: return {}
-            data = json.loads(content)
-        now = time.time()
-        return {tp: info for tp, info in data.items()
-                if isinstance(info, dict) and now - info.get("timestamp", 0) < 180}
-    except Exception:
-        return {}
-
-
-def register_bot_table(table_path, user):
-    if not table_path: return
-    try:
-        data = get_active_bot_tables()
-        data[table_path] = {"user": user, "timestamp": time.time(), "pid": os.getpid()}
-        with open(ACTIVE_TABLES_FILE, 'w') as f: json.dump(data, f)
-    except Exception:
-        pass
-
-
-def unregister_bot_table(table_path):
-    if not table_path: return
-    try:
-        data = get_active_bot_tables()
-        if table_path in data:
-            data.pop(table_path, None)
-            with open(ACTIVE_TABLES_FILE, 'w') as f: json.dump(data, f)
-    except Exception:
-        pass
-
+# ★ ĐÃ BỎ cơ chế nhận biết đồng đội (is_family_bot + registry active tables):
+# bots giờ chơi với bất kỳ ai, kể cả nhau
 
 def fetch_session_info():
     global COOKIE, TOKEN, CURRENT_PLAYER_NICKNAME, CURRENT_PLAYER_ID, PLACE_PATH, _IDENTITY_SYNCED
@@ -419,6 +384,17 @@ INITIAL_BAG = {'A': 2, 'B': 2, 'N': 2, 'R': 2, 'C': 2, 'P': 5,
                'a': 2, 'b': 2, 'n': 2, 'r': 2, 'c': 2, 'p': 5}
 BAG_ORDER = ['A', 'B', 'N', 'R', 'C', 'P', 'a', 'b', 'n', 'r', 'c', 'p']
 
+# ★ FIX ~20-nước: loại quân phỏng đoán theo ô chuẩn (giống bảng BPiece của
+# engine). Engine CRASH khi nhận FEN có X/x ở ô không chuẩn (BPiece lookup
+# trả NO_PIECE_TYPE) → mọi X/x đặt vào FEN phải đảm bảo nằm ở ô chuẩn,
+# nếu không phải thay bằng ký tự phỏng đoán.
+PRESUMED_STD = {}
+for _r, _row in ((0, 'RNBAKABNR'), (2, '.C.....C.'), (3, 'P.P.P.P.P')):
+    for _f, _ch in enumerate(_row):
+        if _ch != '.':
+            PRESUMED_STD[(_f, _r)] = _ch              # phía đỏ (rank 0/2/3)
+            PRESUMED_STD[(_f, 9 - _r)] = _ch.lower()  # phía đen (rank 9/7/6)
+
 UCI_MOVE_RE = re.compile(r'^[a-i]\d[a-i]\d$')
 UCI_MOVE_WITH_SUFFIX_RE = re.compile(r'^[a-i]\d[a-i]\d[a-zA-Z]?$')
 
@@ -472,10 +448,82 @@ class XiangqiBoardTracker:
                 bag[ch] = max(0, bag[ch] - 1)
         return "".join(f"{k}{bag[k]}" for k in BAG_ORDER)
 
+    def current_fen_full(self):
+        """★ FIX bot dừng ~nước 20: FEN đầy đủ (placement + side + BAG) dựng từ
+        start_fen + replay toàn bộ nước (kèm ký tự reveal từ server).
+
+        Engine đứt parse 'position ... moves' khi gặp:
+        - nước LẬT (e3e3 / e3e3R) — from==to không có trong MoveList
+        - quân úp đi SAI hình học loại phỏng đoán (BPiece theo ô chuẩn, vd
+          b0 phỏng là Mã nhưng thật là Xe → b0b5R → to_move = MOVE_NONE)
+        → parser silently vất bỏ CẢ PHẦN SAU → vị trí đóng băng, sai lượt →
+        server reject mọi nước → bot đứng im tới hết giờ.
+        Gửi FEN dựng từ dữ liệu server = chính xác tuyệt đối, miễn nhiễm."""
+        grid = {}
+        r = 9
+        for row in self.start_fen.split('/'):
+            f = 0
+            for ch in row:
+                if ch.isdigit():
+                    f += int(ch)
+                else:
+                    if 0 <= f < 9 and r >= 0:
+                        grid[(f, r)] = ch
+                    f += 1
+            r -= 1
+        # ★ HARDENING: X/x ở ô KHÔNG chuẩn trong start_fen (biến thể server)
+        # làm engine crash → thay bằng quân phỏng đoán an toàn
+        for k, ch in list(grid.items()):
+            if ch in ('X', 'x') and k not in PRESUMED_STD:
+                grid[k] = 'P' if ch == 'X' else 'p'
+        for mv in self.uci_moves:
+            if len(mv) < 4 or not UCI_MOVE_WITH_SUFFIX_RE.match(mv):
+                continue
+            m = mv[:4]
+            suf = mv[4:5] if len(mv) > 4 else None
+            try:
+                frm = (ord(m[0]) - 97, int(m[1]))
+                to = (ord(m[2]) - 97, int(m[3]))
+            except Exception:
+                continue
+            if frm == to:
+                if suf:                     # lật quân có reveal → mở tại chỗ
+                    grid[frm] = suf
+                continue
+            pc = grid.pop(frm, None)
+            if pc is None:
+                continue
+            if suf:
+                grid[to] = suf             # suffix = ký tự THẬT (hoa=đỏ, thường=đen)
+            elif pc in ('X', 'x'):
+                # quân úp đi KHÔNG reveal (corner-case) → không được đặt X ở
+                # ô mới (engine crash nếu ô không chuẩn) → dùng loại phỏng
+                # đoán theo ô GỐC, đúng như BPiece của engine
+                grid[to] = PRESUMED_STD.get(frm, 'P' if pc == 'X' else 'p')
+            else:
+                grid[to] = pc
+        rows = []
+        for rr in range(9, -1, -1):
+            row = ''
+            empty = 0
+            for ff in range(9):
+                ch = grid.get((ff, rr))
+                if ch is None:
+                    empty += 1
+                else:
+                    if empty:
+                        row += str(empty)
+                        empty = 0
+                    row += ch
+            if empty:
+                row += str(empty)
+            rows.append(row)
+        return '/'.join(rows) + f" {self.side_to_move} {self.bag_string()} 0 1"
+
     def get_current_fen(self):
-        fen = f"{self.start_fen} {self.bag_string()} {self.start_side} - - 0 1"
-        moves = [m for m in self.uci_moves if UCI_MOVE_WITH_SUFFIX_RE.match(m)]
-        return fen, moves
+        """Trả về (FEN đầy đủ, danh sách nước) — FEN dùng cho 'position fen',
+        moves chỉ còn dùng cho logic ponder-hit (so sánh 4 ký tự đầu)."""
+        return self.current_fen_full(), list(self.uci_moves)
 
     def set_base(self, board_fen, side='w'):
         board_fen = board_fen.split(' ')[0] if ' ' in board_fen else board_fen
@@ -762,9 +810,14 @@ class JieqiEngine:
         # PikaJieQi auto-generates BAG from board and tracks reveals.
         # Moves WITH reveal suffix (e.g. "c3c4R") are supported by PikaJieQi.
         try:
-            cmd = "position startpos"
-            if moves:
-                cmd += " moves " + " ".join(moves)
+            # ★ FIX ~20-nước: ưu tiên FEN đầy đủ — chính xác tuyệt đối, miễn nhiễm
+            # lỗi parser moves của engine (nước lật, quân úp sai hình học phỏng đoán)
+            if fen and ' ' in fen:
+                cmd = "position fen " + fen
+            else:
+                cmd = "position startpos"
+                if moves:
+                    cmd += " moves " + " ".join(moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -834,7 +887,7 @@ class JieqiEngine:
                 return
             time.sleep(0.02)
 
-    def start_ponder(self, moves, predicted):
+    def start_ponder(self, moves, predicted, fen=None):
         """Search sẵn vị trí SAU nước dự đoán của đối thủ (go ponder infinite)."""
         if not self.alive() or self._engine_searching:
             return False
@@ -846,7 +899,11 @@ class JieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            cmd = "position startpos moves " + " ".join(self._ponder_moves)
+            # ★ FIX ~20-nước: dùng FEN (miễn nhiễm lỗi parser moves)
+            if fen and ' ' in fen:
+                cmd = "position fen " + fen + " moves " + predicted
+            else:
+                cmd = "position startpos moves " + " ".join(self._ponder_moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.write("go ponder infinite\n")
@@ -1093,18 +1150,11 @@ class JieqiCupBot:
             return valid
         return [self.bet_amts[0]] if self.bet_amts else []
 
-    def is_family_bot(self, name):
-        if not name or name.strip().lower() == CURRENT_PLAYER_NICKNAME.lower():
-            return False
-        return "." in name
-
     def leave_table(self):
         if self.board.is_playing:
             print("[TABLE] ⚠️ Ingame, cannot leave!")
             return
         print("[TABLE] 🚪 Leaving...")
-        if self._table_path:
-            unregister_bot_table(self._table_path)
         self.in_game = False
         self._joining_table = False
         self._table_path = None
@@ -1276,21 +1326,12 @@ class JieqiCupBot:
         status = msg.read_byte()
         if status == 0:
             table_path = msg.read_ascii()
-            active_tables = get_active_bot_tables()
-            if table_path in active_tables:
-                owner = active_tables[table_path].get("user", "")
-                if owner.lower() != USER.lower():
-                    print(f"[AVOID] 🛑 Bot table {owner}")
-                    self.in_game = False
-                    self._joining_table = False
-                    return
             self.in_game = True
             self._joining_table = True
             self._table_created_by_me = False
             self._sit_alone_since = time.time()
             self._table_path = table_path
             self._table_path_ts = time.time()
-            register_bot_table(table_path, USER)
             print(f"[SEARCH] ✅ Table: {table_path}")
             threading.Thread(target=lambda: (time.sleep(0.5),
                                               self.send_enter_place(path=table_path, mode=1)),
@@ -1315,7 +1356,6 @@ class JieqiCupBot:
             self._sit_alone_since = time.time()
             self._table_path = table_path
             self._table_path_ts = time.time()
-            register_bot_table(table_path, USER)
             print(f"[CREATE] 🎉 {table_path}")
             threading.Thread(target=lambda: (time.sleep(0.5),
                                               self.send_enter_place(path=table_path, mode=1)),
@@ -1332,10 +1372,6 @@ class JieqiCupBot:
             if pid > 0 and pid != CURRENT_PLAYER_ID:
                 self.player_names[pid] = name
                 print(f"[PLAYER] 👤 '{name}' (id={pid})")
-                if not self.board.is_playing and self.is_family_bot(name):
-                    if self.opponent_player_id() == pid:
-                        print(f"[AVOID] Ally bot -> leave")
-                        self.leave_table()
         except Exception:
             pass
 
@@ -1356,10 +1392,6 @@ class JieqiCupBot:
                 if player_id > 0:
                     name = self.player_names.get(player_id, "")
                     print(f"[TABLE] Opponent: pid={player_id}{f', {name}' if name else ''}")
-                    if not self.board.is_playing and self.is_family_bot(name):
-                        print(f"[AVOID] Ally -> leave")
-                        self.leave_table()
-                        return
                     self._sit_alone_since = None
                     if not self.board.is_playing:
                         threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
@@ -1828,13 +1860,13 @@ class JieqiCupBot:
             if len(pv) < 2:
                 return
             mine, predicted = pv[0], pv[1]
-            _, moves = self.board.get_current_fen()
+            fen, moves = self.board.get_current_fen()
             # chỉ ponder khi nước cuối trên bàn chính là nước ta vừa đi (khớp PV)
             if not moves or moves[-1][:4] != mine[:4]:
                 return
             if not re.match(r"^[a-i]\d[a-i]\d", predicted[:4]):
                 return
-            if eng.start_ponder(list(moves), predicted):
+            if eng.start_ponder(list(moves), predicted, fen=fen):
                 print(f"[PONDER] 🧠 Nghĩ trước trong lúc đối thủ nghĩ (đoán: {predicted})",
                       flush=True)
         except Exception:
