@@ -1,0 +1,52 @@
+name: Cờ Úp Bot (PikaJieQi)
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+# ★ Queue: phiên cron mới sẽ CHỜ phiên trước KẾT THÚC rồi mới chạy
+# (không hủy giữa chừng ván — tránh 2 process cùng tài khoản)
+concurrency:
+  group: cup-bot-jieqi
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential unrar
+    
+    - name: Install Python dependencies
+      run: |
+        pip install websocket-client requests
+    
+    - name: Build PikaJieQi engine
+      run: |
+        bash build_engine.sh
+    
+    - name: Verify engine
+      run: |
+        echo "uci" | ./pikajieqi-native | head -3
+        ls -la pikajieqi-native pikafish.nnue
+    
+    - name: Run cup bot
+      env:
+        CARO_USER19: ${{ secrets.CARO_USER19 }}
+        CARO_PASSWD19: ${{ secrets.CARO_PASSWD19 }}
+      run: |
+        python3 -u cup_bot_jieqi.py
+      timeout-minutes: 340

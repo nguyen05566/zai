@@ -592,6 +592,9 @@ class JieqiEngine:
 
     def _init_engine(self):
         """Start pikajieqi-native as subprocess."""
+        self._pondering = False       # ★ PONDER: process mới → hết trạng thái ponder
+        self._ponder_moves = None
+        self._ponder_pred = None
         if self.proc:
             try:
                 self.proc.stdin.write("quit\n")
@@ -744,6 +747,10 @@ class JieqiEngine:
             if not self.restart():
                 return None
 
+        # ★ PONDER: đang ponder → dừng hẳn (stop + isready drain) rồi mới search
+        if self._pondering:
+            self.stop_ponder()
+
         self._latest_bestmove = None
         self._engine_searching = True
         with self._lines_lock:
@@ -791,6 +798,8 @@ class JieqiEngine:
                         if l.startswith("info") and "depth" in l:
                             m = re.search(r'depth (\d+)', l)
                             if m: self._last_depth = m.group(1)
+                            pv = re.search(r' pv (.+)$', l)          # ★ PONDER
+                            if pv: self._last_pv = pv.group(1).split()
                             sm = re.search(r'score (cp|mate) (-?\d+)', l)
                             if sm:
                                 if sm.group(1) == "mate":
@@ -807,6 +816,133 @@ class JieqiEngine:
         print(f"[ENGINE] bestmove timeout after stop")
         self._engine_searching = False
         return self._latest_bestmove
+
+    # ==================== ★ PONDER ====================
+
+    def _drain_idle(self, timeout=3.0):
+        """Đợi engine nhàn rỗi thật sự: isready → readyok."""
+        self._readyok = False
+        try:
+            with self.engine_lock:
+                self.proc.stdin.write("isready\n")
+                self.proc.stdin.flush()
+        except Exception:
+            return
+        t0 = time.time()
+        while time.time() - t0 < timeout and not self._readyok:
+            if not self.alive():
+                return
+            time.sleep(0.02)
+
+    def start_ponder(self, moves, predicted):
+        """Search sẵn vị trí SAU nước dự đoán của đối thủ (go ponder infinite)."""
+        if not self.alive() or self._engine_searching:
+            return False
+        self._latest_bestmove = None
+        self._engine_searching = True
+        self._pondering = True
+        self._ponder_pred = predicted[:4]
+        self._ponder_moves = list(moves) + [predicted]
+        with self._lines_lock:
+            self._stdout_lines.clear()
+        try:
+            cmd = "position startpos moves " + " ".join(self._ponder_moves)
+            with self.engine_lock:
+                self.proc.stdin.write(cmd + "\n")
+                self.proc.stdin.write("go ponder infinite\n")
+                self.proc.stdin.flush()
+        except Exception as e:
+            print(f"[PONDER] start error: {e}")
+            self._pondering = False
+            self._ponder_moves = None
+            self._ponder_pred = None
+            self._engine_searching = False
+            return False
+        return True
+
+    def stop_ponder(self):
+        """Hủy ponder (đối thủ đi khác dự đoán / hết ván). Đợi xả bestmove."""
+        if not self._pondering:
+            return
+        self._pondering = False
+        try:
+            with self.engine_lock:
+                self.proc.stdin.write("stop\n")
+                self.proc.stdin.flush()
+        except Exception:
+            pass
+        t0 = time.time()
+        while time.time() - t0 < 2.0 and self._latest_bestmove is None:
+            if not self.alive():
+                break
+            time.sleep(0.02)
+        self._latest_bestmove = None
+        # ★ chờ engine NHÀN RỖI thật sự (isready→readyok) trước khi trả quyền —
+        # gửi go mới ngay sau bestmove của ponder gây race: go infinite bị nuốt
+        self._readyok = False
+        try:
+            with self.engine_lock:
+                self.proc.stdin.write("isready\n")
+                self.proc.stdin.flush()
+        except Exception:
+            pass
+        t0 = time.time()
+        while time.time() - t0 < 3.0 and not self._readyok:
+            if not self.alive():
+                break
+            time.sleep(0.02)
+        self._engine_searching = False
+        self._ponder_moves = None
+        self._ponder_pred = None
+
+    def ponderhit(self, movetime_ms):
+        """Đối thủ đi ĐÚNG dự đoán → chuyển sang search bình thường, trả bestmove."""
+        if not self._pondering:
+            return None
+        self._pondering = False
+        try:
+            with self.engine_lock:
+                self.proc.stdin.write("ponderhit\n")
+                self.proc.stdin.flush()
+        except Exception:
+            self._engine_searching = False
+            return None
+        # engine tiếp tục search từ chỗ đã đi được → cho thêm movetime rồi stop
+        time.sleep(movetime_ms / 1000.0)
+        try:
+            with self.engine_lock:
+                self.proc.stdin.write("stop\n")
+                self.proc.stdin.flush()
+        except Exception:
+            pass
+        t0 = time.time()
+        while time.time() - t0 < 5.0:
+            if self._latest_bestmove:
+                bm = self._latest_bestmove
+                self._latest_bestmove = None
+                # capture pv mới cho lượt ponder kế tiếp
+                with self._lines_lock:
+                    for l in reversed(self._stdout_lines):
+                        if l.startswith("info") and " pv " in l:
+                            pv = re.search(r' pv (.+)$', l)
+                            if pv:
+                                self._last_pv = pv.group(1).split()
+                            break
+                self._engine_searching = False
+                self._ponder_moves = None
+                self._ponder_pred = None
+                self._drain_idle()   # ★ chờ engine nhàn sau bestmove ponderhit
+                return bm
+            if not self.alive():
+                self._engine_searching = False
+                return None
+            time.sleep(0.02)
+        print(f"[PONDER] bestmove timeout sau ponderhit")
+        self._engine_searching = False
+        self._ponder_moves = None
+        self._ponder_pred = None
+        self._drain_idle()   # chờ engine nhàn trước khi fallback search thường
+        return None
 
 
 
@@ -1472,7 +1608,10 @@ class JieqiCupBot:
             was_my_turn = self.board.is_my_turn
             self.board.is_my_turn = (slot_id == self.board.my_slot_id)
             self.last_action_timestamp = time.time()
-            if not self.board.is_my_turn: return
+            if not self.board.is_my_turn:
+                # ★ PONDER: lượt đối thủ → engine nghĩ trước trên nước dự đoán (PV)
+                self._try_start_ponder()
+                return
             self._turn_started_at = time.time()
             self._turn_deadline = self._turn_started_at + max(turn_timeout - 5, 10)
             self._played_this_turn = False
@@ -1541,6 +1680,13 @@ class JieqiCupBot:
         self._played_this_turn = False
         self._turn_started_at = 0.0
         self._turn_deadline = 0.0
+
+        # ★ PONDER: hết ván → dừng ponder nếu còn đang chạy
+        if self.engine and hasattr(self.engine, "stop_ponder"):
+            try:
+                self.engine.stop_ponder()
+            except Exception:
+                pass
 
         if self.engine and self.engine.alive():
             try:
@@ -1613,7 +1759,21 @@ class JieqiCupBot:
         print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
               flush=True)
 
-        raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
+        # ★ PONDER: đối thủ đi ĐÚNG nước dự đoán → ponderhit (tận dụng search sẵn)
+        raw = None
+        try:
+            if (self.engine._pondering and self.engine._ponder_moves is not None
+                    and len(moves) >= 2
+                    and moves[:-1] == self.engine._ponder_moves[:-1]
+                    and moves[-1][:4] == self.engine._ponder_pred):
+                print(f"[PONDER] ⚡ Đoán đúng nước đối thủ ({self.engine._ponder_pred}) "
+                      f"— ponderhit!", flush=True)
+                raw = self.engine.ponderhit(movetime_ms)
+        except Exception as e:
+            print(f"[PONDER] ponderhit lỗi ({e}) — fallback search thường", flush=True)
+            raw = None
+        if not raw:
+            raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
 
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
@@ -1652,6 +1812,33 @@ class JieqiCupBot:
         except Exception as e:
             print(f"[BOT ERROR] {e}")
             traceback.print_exc()
+
+    def _try_start_ponder(self):
+        """★ PONDER: trong lúc đối thủ suy nghĩ, engine search sẵn vị trí
+        sau nước dự đoán (lấy từ PV của lượt search trước)."""
+        try:
+            eng = self.engine
+            if not eng or not hasattr(eng, "start_ponder"):
+                return
+            if not eng.alive() or eng._pondering or eng._engine_searching:
+                return
+            if not self.board.is_playing or self.board.is_my_turn:
+                return
+            pv = list(getattr(eng, "_last_pv", []))
+            if len(pv) < 2:
+                return
+            mine, predicted = pv[0], pv[1]
+            _, moves = self.board.get_current_fen()
+            # chỉ ponder khi nước cuối trên bàn chính là nước ta vừa đi (khớp PV)
+            if not moves or moves[-1][:4] != mine[:4]:
+                return
+            if not re.match(r"^[a-i]\d[a-i]\d", predicted[:4]):
+                return
+            if eng.start_ponder(list(moves), predicted):
+                print(f"[PONDER] 🧠 Nghĩ trước trong lúc đối thủ nghĩ (đoán: {predicted})",
+                      flush=True)
+        except Exception:
+            pass
 
     def _decode_piece_id(self, encoded_id):
         color = 'r'
