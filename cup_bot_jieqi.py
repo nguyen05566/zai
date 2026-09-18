@@ -729,7 +729,8 @@ class JieqiEngine:
             try:
                 _threads = max(1, min(4, (os.cpu_count() or 2)))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
-                self.proc.stdin.write("setoption name Hash value 512\n")
+                # 1 GiB transposition table for deeper reuse in hidden-piece searches.
+                self.proc.stdin.write("setoption name Hash value 1024\n")
                 self.proc.stdin.write("setoption name Ponder value true\n")
                 self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
@@ -744,7 +745,7 @@ class JieqiEngine:
             self._kill()
             return
 
-        print(f"[ENGINE] ✅ pikajieqi-native ready | Threads={_threads} Hash=512 "
+        print(f"[ENGINE] ✅ pikajieqi-native ready | Threads={_threads} Hash=1024 "
               f"Ponder=true MultiPV=1 EvalFile={nnue_path}")
 
     def _wait_for_line(self, prefix, timeout=10):

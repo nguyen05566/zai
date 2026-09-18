@@ -50,7 +50,7 @@ jobs:
         {
           echo "uci"
           echo "setoption name Threads value 4"
-          echo "setoption name Hash value 512"
+          echo "setoption name Hash value 1024"
           echo "setoption name Ponder value true"
           echo "setoption name EvalFile value $PWD/pikafish.nnue"
           echo "setoption name MultiPV value 1"
