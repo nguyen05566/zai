@@ -3,7 +3,7 @@ cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (cppjieqi) thay cho PKJQ
 
 Khác biệt vs cup_bot.py:
   - Engine: pikajieqi-native (C++ native, không cần wine)
-  - Movetime: 2000ms (~2s/nước cho nhanh)
+  - Movetime: 5000ms (5s/nước)
   - Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork-and-think)
   - BAG updates: gửi kèm moves list để Jieqi sync state
 """
@@ -118,8 +118,8 @@ PIKAJIEQI_BINARY_CANDIDATES = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
 ]
 
-MIN_MOVE_SECONDS = 1.5           # ★ giảm từ 2.0 → 1.5 cho nước đơn giản
-MAX_MOVE_SECONDS = 4.0           # ★ tăng thời gian cho thế phức tạp
+MIN_MOVE_SECONDS = 5.0           # cố định 5s/nước
+MAX_MOVE_SECONDS = 5.0           # cố định 5s/nước
 MOVE_DEADLINE_SECONDS = 30.0
 MAX_ENGINE_RESTARTS_PER_GAME = 2  # mỗi ván được restart engine tối đa 2 lần (reset lại quota đầu mỗi ván)
 MOVE_DEDUP_WINDOW = 0.1
@@ -133,7 +133,7 @@ RECONNECT_FAST_DELAY = 2.0       # chờ 2s trước khi reconnect (thay vì exp
 RECONNECT_FAST_MAX = 5           # reconnect nhanh 5 lần đầu
 RECONNECT_INGAME_DELAY = 1.0     # in-game disconnect → reconnect ngay sau1s
 BOT_USE_CREATE_TABLE = True
-BOT_MATCH_DURATION = '5'
+BOT_MATCH_DURATION = '10'         # tạo bàn 10 phút
 BOT_TURN_DURATION = '30'
 BOT_ACC_DURATION = '0'
 BOT_BLOCK_SOFTWARE = '0'
@@ -1844,9 +1844,8 @@ class JieqiCupBot:
 
         fen, moves = self.board.get_current_fen()
 
-        # ★ TIME MANAGEMENT THÍCH NGHI:
-        # - Thế đơn giản (ít quân, ít nước) → nghĩ nhanh (1.5s)
-        # - Thế phức tạp (nhiều quân, nhiều nước) → nghĩ lâu (4s)
+        # ★ TIME MANAGEMENT: cố định 5 giây mỗi nước
+        # - Thế đơn giản/phức tạp đều dùng 5s
         # - Còn ít thời gian → nghĩ nhanh hơn
         # - Score đang thua → nghĩ lâu hơn (tìm nước cứu)
         n_pieces = fen.count('X') + fen.count('x') + fen.count('K') + fen.count('k')
@@ -1854,13 +1853,6 @@ class JieqiCupBot:
         # Ước tính complexity: nhiều quân + nhiều nước = phức tạp
         complexity = min(1.0, (n_pieces / 30.0) * 0.5 + (n_moves / 40.0) * 0.5)
         base_ms = MIN_MOVE_SECONDS + (MAX_MOVE_SECONDS - MIN_MOVE_SECONDS) * complexity
-        # Nếu đang thua (score âm từ lần search trước) → nghĩ lâu hơn 30%
-        try:
-            last_score = float(self.engine._last_score.replace('M', '99'))
-            if last_score < -2.0:
-                base_ms *= 1.3
-        except (ValueError, AttributeError):
-            pass
         movetime_ms = min(int(base_ms * 1000), int((remain - 3.0) * 1000))
         movetime_ms = max(movetime_ms, 1000)  # tối thiểu 1s
         if remain < 8.0:
