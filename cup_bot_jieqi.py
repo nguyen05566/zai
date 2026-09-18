@@ -727,13 +727,15 @@ class JieqiEngine:
             self._kill()
             return
 
-        # Configure engine — PikaJieQi needs NNUE EvalFile
+        # Configure engine for strength while keeping runner resource use safe.
+        # Ponder must be enabled because the bot uses `go ponder infinite`.
         nnue_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikafish.nnue")
         with self.engine_lock:
             try:
                 _threads = max(1, min(4, (os.cpu_count() or 2)))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
-                self.proc.stdin.write("setoption name Hash value 256\n")
+                self.proc.stdin.write("setoption name Hash value 512\n")
+                self.proc.stdin.write("setoption name Ponder value true\n")
                 self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
                 self.proc.stdin.write("isready\n")
@@ -1500,6 +1502,7 @@ class JieqiCupBot:
             try:
                 with self.engine.engine_lock:
                     self.engine.proc.stdin.write("ucinewgame\n")
+                    self.engine.proc.stdin.write("setoption name Clear Hash\n")
                     self.engine.proc.stdin.flush()
             except Exception:
                 pass
