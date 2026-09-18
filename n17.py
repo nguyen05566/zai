@@ -89,8 +89,8 @@ class _UrllibSession:
 requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
-CARO_USER_DIRECT = "nguyen14"
-CARO_PASSWD_DIRECT = "******"
+CARO_USER_DIRECT = "arena5"
+CARO_PASSWD_DIRECT = "nhat123456"
 
 
 def _clean_env(val, default):
@@ -120,7 +120,7 @@ PIKAJIEQI_BINARY_CANDIDATES = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
 ]
 
-ENGINE_MULTIPV = 3
+ENGINE_MULTIPV = 2
 MIN_MOVE_SECONDS = 0
 MOVE_DEADLINE_SECONDS = 30.0
 MAX_SAFE_MOVES = 2
