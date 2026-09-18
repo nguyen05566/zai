@@ -1,69 +1,40 @@
-# zai — Cờ Úp Bot (PikaJieQi)
+# zai — Cờ Úp Bot (Pikafish jieqi_old)
 
-Bot cờ úp (mystery_xiangqi) cho gamevh.net, dùng engine **PikaJieQi** (fork Pikafish jieqi branch).
+Bot cờ úp (mystery_xiangqi) cho gamevh.net, dùng engine native được build trực tiếp từ **official-pikafish/Pikafish**.
 
-## Tính năng
+## Engine source
 
-- **Engine**: PikaJieQi Linux native (build từ source, không cần wine)
-- **Depth**: 19-25 trong 5s search
-- **Movetime**: 5s/move (deadline-aware)
-- **Bet**: 1000 xu
-- **Auto-restart**: Engine tự restart nếu crash
-- **Forbidden moves**: Retry với nước thay thế khi bị server reject
+- Repository: <https://github.com/official-pikafish/Pikafish>
+- Branch: [`jieqi_old`](https://github.com/official-pikafish/Pikafish/tree/jieqi_old)
+- Pinned commit: `23b9466c981f0f3a1133f92de1a6f86406c4eccc`
+- Reason for `jieqi_old`: the existing mystery-xiangqi bot protocol and king-guard patch are compatible with this official branch. The newer `jieqi` branch does not accept the patch without a separate port.
+- NNUE: `pikafish.nnue` from the official [Pikafish Networks](https://github.com/official-pikafish/Networks) release.
 
-## Cấu trúc
+The previous build used the unofficial `brianhliou/pikafish-jieqi-wasm` fork and `jieqi_old-mistboard`; that dependency has been removed.
 
-```
-cup_bot_jieqi.py          # Bot chính (Python)
-build_engine.sh            # Script build PikaJieQi từ source
-pikafish-jieqi.ref         # PikaJieQi git commit hash (pinned)
-.github/workflows/cup_bot.yml  # GitHub Actions workflow
-```
+## Features
 
-## Chạy local
+- Native Linux engine; no Wine required.
+- Deadline-aware search with automatic engine restart.
+- Retry with an alternative move when the game server rejects a move.
+- King-guard patch retained for phantom-check positions in hidden-piece play.
+
+## Local run
 
 ```bash
-# 1. Build engine
 bash build_engine.sh
-
-# 2. Install deps
 pip install websocket-client requests
-
-# 3. Run bot
 python3 cup_bot_jieqi.py
 ```
 
-## Chạy trên GitHub Actions
+The build script clones the official repository, checks out the pinned commit, applies `engine_king_guard.patch`, builds `PikaJieQi`, and writes `pikajieqi-native` plus `pikafish.nnue` at the repository root.
 
-Workflow `.github/workflows/cup_bot.yml` chạy mỗi 6 giờ:
-1. Checkout code
-2. Setup Python 3.11
-3. Install deps (websocket-client, requests)
-4. Build PikaJieQi từ source (commit pinned trong `pikafish-jieqi.ref`)
-5. Run bot (timeout 340 phút)
+## GitHub Actions
 
-### Setup Secrets
+`.github/workflows/cup_bot.yml` runs every six hours and `.github/workflows/n17.yml` runs the second account. Configure `CARO_USER19`, `CARO_PASSWD19`, `CARO_USER17`, and `CARO_PASSWD17` under **Settings → Secrets and variables → Actions**.
 
-Vào **Settings → Secrets and variables → Actions → New repository secret**:
+The engine uses `position startpos moves ...` with reveal suffixes such as `c3c4R`. Do not send a FEN containing a BAG, and use the bot's `go infinite`/`stop` search flow rather than `go movetime`.
 
-| Secret | Value |
-|---|---|
-| `CARO_USER19` | Tài khoản gamevh.net |
-| `CARO_PASSWD19` | Mật khẩu gamevh.net |
+## License
 
-Nếu không set secrets, bot dùng default (`nguyen15` / `nhat123456`).
-
-## PikaJieQi Engine
-
-- **Source**: `brianhliou/pikafish-jieqi-wasm` (branch `jieqi_old-mistboard`)
-- **Commit**: `e75cee3a` (pinned trong `pikafish-jieqi.ref`)
-- **Build**: `make -j ARCH=x86-64-sse41-popcnt build`
-- **NNUE**: `pikafish.nnue` (included trong source repo)
-
-PikaJieQi là fork của Pikafish với jieqi branch — hỗ trợ mystery_xiangqi FEN format (X/x cho quân úp + BAG) natively.
-
-### Quan trọng
-
-- **`go movetime N`** KHÔNG hoạt động (bug trong jieqi branch). Phải dùng `go infinite` + `stop`.
-- **FEN với BAG** gây crash. Phải dùng `position startpos moves ...` thay vì `position fen ...`.
-- PikaJieQi tự generate BAG từ board và track reveals qua move suffix (vd: `c3c4R` = reveal Rook).
+The engine remains covered by the upstream GPLv3 license. Bot-specific files retain their original project licensing and configuration responsibilities.
