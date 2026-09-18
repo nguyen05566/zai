@@ -40,11 +40,20 @@ jobs:
     
     - name: Verify engine
       run: |
-        echo "uci" | ./pikajieqi-native | head -3
+        uci_output=$(printf 'uci\nquit\n' | ./pikajieqi-native)
+        echo "$uci_output"
+        grep -q 'option name Threads type spin' <<< "$uci_output"
+        grep -q 'option name Hash type spin' <<< "$uci_output"
+        grep -q 'option name Ponder type check' <<< "$uci_output"
+        grep -q 'option name EvalFile type string' <<< "$uci_output"
         ls -la pikajieqi-native pikafish.nnue
         {
           echo "uci"
+          echo "setoption name Threads value 4"
+          echo "setoption name Hash value 512"
+          echo "setoption name Ponder value true"
           echo "setoption name EvalFile value $PWD/pikafish.nnue"
+          echo "setoption name MultiPV value 1"
           echo "isready"
           sleep 2
           echo "quit"
