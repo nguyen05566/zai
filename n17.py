@@ -118,8 +118,9 @@ PIKAJIEQI_BINARY_CANDIDATES = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
 ]
 
-MIN_MOVE_SECONDS = 5.0           # cố định 5s/nước
-MAX_MOVE_SECONDS = 5.0           # cố định 5s/nước
+# Engine search budget. This is consumed by get_best_move(), not a delay before
+# sending the already-selected move.
+ENGINE_THINK_SECONDS = 5.0
 MOVE_DEADLINE_SECONDS = 30.0
 MAX_ENGINE_RESTARTS_PER_GAME = 0  # mỗi ván được restart engine tối đa 2 lần (reset lại quota đầu mỗi ván)
 MOVE_DEDUP_WINDOW = 0.1
@@ -788,7 +789,7 @@ class JieqiEngine:
         self._init_engine()
         return self.alive()
 
-    def get_best_move(self, fen, moves, movetime_ms=2000):
+    def get_best_move(self, fen, moves, movetime_ms=int(ENGINE_THINK_SECONDS * 1000)):
         """Send position + go infinite, wait movetime, then stop.
         
         PikaJieQi native engine:
@@ -836,7 +837,7 @@ class JieqiEngine:
             self._engine_searching = False
             return None
 
-        # Wait movetime_ms then send stop
+        # Think for the requested budget, then stop the search.
         time.sleep(movetime_ms / 1000.0)
         try:
             with self.engine_lock:
@@ -1901,16 +1902,10 @@ class JieqiCupBot:
 
         fen, moves = self.board.get_current_fen()
 
-        # ★ TIME MANAGEMENT: cố định 5 giây mỗi nước
-        # - Thế đơn giản/phức tạp đều dùng 5s
-        # - Còn ít thời gian → nghĩ nhanh hơn
-        # - Score đang thua → nghĩ lâu hơn (tìm nước cứu)
-        n_pieces = fen.count('X') + fen.count('x') + fen.count('K') + fen.count('k')
-        n_moves = len(moves)
-        # Ước tính complexity: nhiều quân + nhiều nước = phức tạp
-        complexity = min(1.0, (n_pieces / 30.0) * 0.5 + (n_moves / 40.0) * 0.5)
-        base_ms = MIN_MOVE_SECONDS + (MAX_MOVE_SECONDS - MIN_MOVE_SECONDS) * complexity
-        movetime_ms = min(int(base_ms * 1000), int((remain - 3.0) * 1000))
+        # Search budget is passed directly to get_best_move(), which performs
+        # `go infinite`, waits this long, then sends `stop`.
+        movetime_ms = min(int(ENGINE_THINK_SECONDS * 1000),
+                          int((remain - 3.0) * 1000))
         movetime_ms = max(movetime_ms, 1000)  # tối thiểu 1s
         if remain < 8.0:
             movetime_ms = max(800, int((remain - 2.0) * 1000))  # sắp hết giờ → nghĩ nhanh
@@ -1973,9 +1968,6 @@ class JieqiCupBot:
 
         try:
             source_pos, target_pos = self.board.engine_move_to_pos(best_move)
-            _turn_start = self._turn_started_at if self._turn_started_at > 0 else time.time()
-            _remain_min = MIN_MOVE_SECONDS - (time.time() - _turn_start)
-            if _remain_min > 0: time.sleep(_remain_min)
             if not (self.board.is_my_turn and self.board.is_playing): return
             if self._played_this_turn: return
 
