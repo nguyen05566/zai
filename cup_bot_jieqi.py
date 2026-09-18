@@ -89,8 +89,8 @@ class _UrllibSession:
 requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
-CARO_USER_DIRECT = "nguyen13"
-CARO_PASSWD_DIRECT = "******"
+CARO_USER_DIRECT = "nguyen1"
+CARO_PASSWD_DIRECT = "n123456"
 
 
 def _clean_env(val, default):
@@ -121,7 +121,8 @@ PIKAJIEQI_BINARY_CANDIDATES = [
 ]
 
 ENGINE_MULTIPV = 1
-MIN_MOVE_SECONDS = 2.0
+MIN_MOVE_SECONDS = 1.5           # ★ giảm từ 2.0 → 1.5 cho nước đơn giản
+MAX_MOVE_SECONDS = 4.0           # ★ tăng thời gian cho thế phức tạp
 MOVE_DEADLINE_SECONDS = 30.0
 MAX_SAFE_MOVES = 250
 TRUST_ENGINE_AFTER = 100
@@ -129,8 +130,13 @@ MAX_ENGINE_RESTARTS_PER_GAME = 2  # mỗi ván được restart engine tối đa
 MOVE_DEDUP_WINDOW = 0.1
 KICK_MODE = "when_lose"
 KICK_DELAY = 5.0
-SIT_ALONE_TIMEOUT = 300.0  # ngồi chờ đối thủ trong bàn tối đa 5 phút rồi mới rời bàn
-BOT_BET_XU = 20000
+SIT_ALONE_TIMEOUT = 600.0  # ngồi chờ đối thủ trong bàn tối đa 10 phút rồi mới rời bàn
+BOT_BET_XU = 5000
+
+# ★ RECONNECT: cấu hình kết nối lại nhanh hơn
+RECONNECT_FAST_DELAY = 2.0       # chờ 2s trước khi reconnect (thay vì exponential)
+RECONNECT_FAST_MAX = 5           # reconnect nhanh 5 lần đầu
+RECONNECT_INGAME_DELAY = 1.0     # in-game disconnect → reconnect ngay sau1s
 BOT_USE_CREATE_TABLE = True
 BOT_MATCH_DURATION = '5'
 BOT_TURN_DURATION = '30'
@@ -725,9 +731,9 @@ class JieqiEngine:
         nnue_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikafish.nnue")
         with self.engine_lock:
             try:
-                _threads = max(1, min(2, (os.cpu_count() or 2) - 1))
+                _threads = max(1, min(4, (os.cpu_count() or 2)))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
-                self.proc.stdin.write("setoption name Hash value 128\n")
+                self.proc.stdin.write("setoption name Hash value 256\n")
                 self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
                 self.proc.stdin.write("isready\n")
@@ -1151,6 +1157,11 @@ class JieqiCupBot:
             self._reconnect_streak += 1
         else:
             self._reconnect_streak = 0
+        # ★ LƯU table_path TRƯỚC KHI RESET — để reconnect vào lại bàn
+        saved_table_path = self._table_path
+        saved_table_path_ts = self._table_path_ts
+        saved_in_game = self.in_game
+        saved_is_playing = self.board.is_playing
         self.connected = False
         self.logged_in = False
         self.in_game = False
@@ -1162,6 +1173,11 @@ class JieqiCupBot:
         self._thinking = False
         self._played_this_turn = False
         self.board.reset()
+        # ★ RECONNECT: nếu đang chơi → lưu table_path để reconnect vào lại bàn
+        if saved_is_playing and saved_table_path:
+            self._table_path = saved_table_path
+            self._table_path_ts = saved_table_path_ts
+            print(f"[RECONNECT] Lưu table_path={saved_table_path} để vào lại bàn")
 
     def send_message(self, cmd, data=b''):
         if self.ws and self.connected:
@@ -1827,13 +1843,29 @@ class JieqiCupBot:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
 
-        # Movetime: 2s/move — engine nghĩ nhanh hơn (depth thấp hơn chút)
-        # Cap để còn thời gian fallback nếu bị reject
-        movetime_ms = min(2000, int((remain - 3.0) * 1000))
-        if movetime_ms < 1500:
-            movetime_ms = max(1500, int(remain * 500))
-
         fen, moves = self.board.get_current_fen()
+
+        # ★ TIME MANAGEMENT THÍCH NGHI:
+        # - Thế đơn giản (ít quân, ít nước) → nghĩ nhanh (1.5s)
+        # - Thế phức tạp (nhiều quân, nhiều nước) → nghĩ lâu (4s)
+        # - Còn ít thời gian → nghĩ nhanh hơn
+        # - Score đang thua → nghĩ lâu hơn (tìm nước cứu)
+        n_pieces = fen.count('X') + fen.count('x') + fen.count('K') + fen.count('k')
+        n_moves = len(moves)
+        # Ước tính complexity: nhiều quân + nhiều nước = phức tạp
+        complexity = min(1.0, (n_pieces / 30.0) * 0.5 + (n_moves / 40.0) * 0.5)
+        base_ms = MIN_MOVE_SECONDS + (MAX_MOVE_SECONDS - MIN_MOVE_SECONDS) * complexity
+        # Nếu đang thua (score âm từ lần search trước) → nghĩ lâu hơn 30%
+        try:
+            last_score = float(self.engine._last_score.replace('M', '99'))
+            if last_score < -2.0:
+                base_ms *= 1.3
+        except (ValueError, AttributeError):
+            pass
+        movetime_ms = min(int(base_ms * 1000), int((remain - 3.0) * 1000))
+        movetime_ms = max(movetime_ms, 1000)  # tối thiểu 1s
+        if remain < 8.0:
+            movetime_ms = max(800, int((remain - 2.0) * 1000))  # sắp hết giờ → nghĩ nhanh
 
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
         print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
@@ -1961,12 +1993,20 @@ class JieqiCupBot:
                         time.sleep(2)
 
                 if not self.connected:
-                    if self._reconnect_streak >= 3:
-                        print(f"[BOT] ⚠️ Tài khoản {USER} có thể đăng nhập chỗ khác")
-                    if self._reconnect_streak > 0:
-                        delay = min(60, 5 * (2 ** min(self._reconnect_streak - 1, 4)))
-                        print(f"[WS] Rớt liên tiếp {self._reconnect_streak} -> chờ {delay}s")
+                    # ★ RECONNECT THÔNG MINH: nhanh hơn khi đang in-game
+                    if self._table_path and time.time() - self._table_path_ts < 300:
+                        # Đang có bàn → reconnect nhanh (1-2s)
+                        delay = RECONNECT_INGAME_DELAY if self._reconnect_streak < RECONNECT_FAST_MAX else min(10, 2 * self._reconnect_streak)
+                        print(f"[RECONNECT] In-game disconnect → chờ {delay}s rồi vào lại bàn {self._table_path}")
                         time.sleep(delay)
+                    else:
+                        # Không có bàn → reconnect thường
+                        if self._reconnect_streak >= 3:
+                            print(f"[BOT] ⚠️ Tài khoản {USER} có thể đăng nhập chỗ khác")
+                        if self._reconnect_streak > 0:
+                            delay = min(30, 3 * (2 ** min(self._reconnect_streak - 1, 3)))
+                            print(f"[WS] Rớt liên tiếp {self._reconnect_streak} -> chờ {delay}s")
+                            time.sleep(delay)
                     if not fetch_session_info():
                         time.sleep(5); continue
                     self.logged_in = False; self.in_game = False
