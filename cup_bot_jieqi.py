@@ -875,6 +875,67 @@ class JieqiEngine:
         self._engine_searching = False
         return self._latest_bestmove
 
+    def get_alternate_moves(self, fen, excluded, movetime_ms=1200, multipv=3):
+        """Tìm ứng viên thay thế sau khi server từ chối một nước.
+
+        Lượt bình thường vẫn dùng MultiPV=1. Chỉ bật MultiPV tạm thời khi
+        cần fallback, tránh làm giảm độ sâu tìm kiếm của các lượt khác.
+        """
+        if not self.alive() or not fen or ' ' not in fen:
+            return []
+        excluded = {m[:4] for m in excluded}
+        self._latest_bestmove = None
+        self._engine_searching = True
+        with self._lines_lock:
+            self._stdout_lines.clear()
+        try:
+            self._readyok = False
+            with self.engine_lock:
+                self.proc.stdin.write(f"setoption name MultiPV value {multipv}\n")
+                self.proc.stdin.write("isready\n")
+                self.proc.stdin.flush()
+            if not self._wait_for_readyok(timeout=3):
+                return []
+            with self.engine_lock:
+                self.proc.stdin.write("position fen " + fen + "\n")
+                self.proc.stdin.write("go infinite\n")
+                self.proc.stdin.flush()
+            time.sleep(movetime_ms / 1000.0)
+            with self.engine_lock:
+                self.proc.stdin.write("stop\n")
+                self.proc.stdin.flush()
+            deadline = time.time() + 4.0
+            while time.time() < deadline and not self._latest_bestmove:
+                if not self.alive():
+                    break
+                time.sleep(0.02)
+            candidates = []
+            with self._lines_lock:
+                lines = list(self._stdout_lines)
+            for line in lines:
+                if not line.startswith("info") or " pv " not in line:
+                    continue
+                pv = re.search(r"\s+pv\s+(.+)$", line)
+                if not pv:
+                    continue
+                move = pv.group(1).split()[0][:4]
+                if re.match(r"^[a-i]\d[a-i]\d$", move) and move not in excluded:
+                    if move not in candidates:
+                        candidates.append(move)
+            return candidates
+        except Exception as e:
+            print(f"[ENGINE] alternate search error: {e}", flush=True)
+            return []
+        finally:
+            self._engine_searching = False
+            try:
+                with self.engine_lock:
+                    self.proc.stdin.write("setoption name MultiPV value 1\n")
+                    self.proc.stdin.write("isready\n")
+                    self.proc.stdin.flush()
+            except Exception:
+                pass
+
     # ==================== ★ PONDER ====================
 
     def _drain_idle(self, timeout=3.0):
@@ -1901,9 +1962,15 @@ class JieqiCupBot:
               flush=True)
 
         if best_move in self._rejected_moves:
-            # PikaJieQi doesn't support forbidden command — just skip and let server timeout
-            print(f"[ENGINE] Rejected move {best_move}, skip", flush=True)
-            return
+            print(f"[ENGINE] Rejected move {best_move}, tìm ứng viên thay thế", flush=True)
+            alternatives = self.engine.get_alternate_moves(
+                fen, self._rejected_moves, movetime_ms=min(1500, movetime_ms), multipv=3)
+            if alternatives:
+                best_move = alternatives[0]
+                print(f"[ENGINE] Alternate candidate: {best_move}", flush=True)
+            else:
+                print("[ENGINE] Không có ứng viên thay thế — bỏ lượt", flush=True)
+                return
         if best_move in ("(none)", "0000"):
             self.board.is_my_turn = False
             return
