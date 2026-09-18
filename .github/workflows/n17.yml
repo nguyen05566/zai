@@ -42,6 +42,14 @@ jobs:
       run: |
         echo "uci" | ./pikajieqi-native | head -3
         ls -la pikajieqi-native pikafish.nnue
+        {
+          echo "uci"
+          echo "setoption name EvalFile value $PWD/pikafish.nnue"
+          echo "isready"
+          sleep 2
+          echo "quit"
+        } | ./pikajieqi-native 2>&1 | tee /tmp/pikafish-nnue.log
+        grep -q "readyok" /tmp/pikafish-nnue.log
     
     - name: Run cup bot
       env:
