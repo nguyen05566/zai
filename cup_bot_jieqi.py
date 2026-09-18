@@ -121,12 +121,12 @@ PIKAJIEQI_BINARY_CANDIDATES = [
 MIN_MOVE_SECONDS = 5.0           # cố định 5s/nước
 MAX_MOVE_SECONDS = 5.0           # cố định 5s/nước
 MOVE_DEADLINE_SECONDS = 30.0
-MAX_ENGINE_RESTARTS_PER_GAME = 2  # mỗi ván được restart engine tối đa 2 lần (reset lại quota đầu mỗi ván)
+MAX_ENGINE_RESTARTS_PER_GAME = 0  # mỗi ván được restart engine tối đa 2 lần (reset lại quota đầu mỗi ván)
 MOVE_DEDUP_WINDOW = 0.1
 KICK_MODE = "when_lose"
 KICK_DELAY = 5.0
 SIT_ALONE_TIMEOUT = 600.0  # ngồi chờ đối thủ trong bàn tối đa 10 phút rồi mới rời bàn
-BOT_BET_XU = 50000
+BOT_BET_XU = 10000
 
 # ★ RECONNECT: cấu hình kết nối lại nhanh hơn
 RECONNECT_FAST_DELAY = 2.0       # chờ 2s trước khi reconnect (thay vì exponential)
