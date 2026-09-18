@@ -116,16 +116,11 @@ PLACE_PATH = 'Lobby.mystery_xiangqi.0'
 # pikajieqi-native (cppjieqi wrapper) — C++ native, no wine needed
 PIKAJIEQI_BINARY_CANDIDATES = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
 ]
 
-ENGINE_MULTIPV = 1
 MIN_MOVE_SECONDS = 1.5           # ★ giảm từ 2.0 → 1.5 cho nước đơn giản
 MAX_MOVE_SECONDS = 4.0           # ★ tăng thời gian cho thế phức tạp
 MOVE_DEADLINE_SECONDS = 30.0
-MAX_SAFE_MOVES = 250
-TRUST_ENGINE_AFTER = 100
 MAX_ENGINE_RESTARTS_PER_GAME = 2  # mỗi ván được restart engine tối đa 2 lần (reset lại quota đầu mỗi ván)
 MOVE_DEDUP_WINDOW = 0.1
 KICK_MODE = "when_lose"
@@ -749,7 +744,8 @@ class JieqiEngine:
             self._kill()
             return
 
-        print("[ENGINE] ✅ pikajieqi-native ready")
+        print(f"[ENGINE] ✅ pikajieqi-native ready | Threads={_threads} Hash=512 "
+              f"Ponder=true MultiPV=1 EvalFile={nnue_path}")
 
     def _wait_for_line(self, prefix, timeout=10):
         t0 = time.time()
