@@ -1,33 +1,29 @@
 #!/bin/bash
-# build_engine.sh — Build ForgeQi (engine cờ úp độc lập, duy nhất của bot)
-# Classical eval tích hợp sẵn — KHÔNG cần NNUE, KHÔNG phụ thuộc Pikafish.
-set -ex
-
+# Build ZaiQi: an independent cờ úp UCI engine written for this bot.
+set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
-rm -rf /tmp/forgeqi
-git clone --depth 1 https://github.com/nguyen05566/forgeqi /tmp/forgeqi
-cd /tmp/forgeqi
-bash scripts/build.sh
-test -x forgeqi
+g++ -std=c++17 -O3 -pthread -Wall -Wextra \
+  -o "$SCRIPT_DIR/zaiqi" "$SCRIPT_DIR/zaiqi_engine.cpp"
+chmod +x "$SCRIPT_DIR/zaiqi"
 
-# Smoke test: engine phải trả lời UCI cơ bản
-printf 'uci\nisready\nquit\n' | ./forgeqi | grep -q uciok
-printf 'uci\nisready\nquit\n' | ./forgeqi | grep -q readyok
+# Protocol smoke tests.
+printf 'uci\nisready\nquit\n' | "$SCRIPT_DIR/zaiqi" > /tmp/zaiqi-uci.log
+grep -q '^uciok$' /tmp/zaiqi-uci.log
+grep -q '^readyok$' /tmp/zaiqi-uci.log
 
-# Smoke test thế cờ úp: FEN X/x + BAG + reveal suffix + go infinite/stop
 {
-  echo "uci"
-  echo "position startpos moves c3c4R h9g7n"
-  echo "go infinite"
-  sleep 2
-  echo "stop"
+  echo uci
+  echo isready
+  echo 'position startpos moves c3c4R h9g7n'
+  echo 'go infinite'
   sleep 1
-  echo "quit"
-} | timeout 20 ./forgeqi | tee /tmp/fq_smoke.log
-grep -q '^bestmove ' /tmp/fq_smoke.log
+  echo stop
+  sleep 1
+  echo quit
+} | timeout 10 "$SCRIPT_DIR/zaiqi" > /tmp/zaiqi-game.log
+grep -Eq '^bestmove [a-i][0-9][a-i][0-9]' /tmp/zaiqi-game.log
 
-cp forgeqi "$SCRIPT_DIR/forgeqi"
-chmod +x "$SCRIPT_DIR/forgeqi"
-echo "✅ ForgeQi built successfully"
-ls -la "$SCRIPT_DIR/forgeqi"
+echo "ZaiQi built successfully"
+ls -la "$SCRIPT_DIR/zaiqi"

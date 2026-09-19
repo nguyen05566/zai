@@ -2,7 +2,7 @@
 cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (cppjieqi) thay cho PKJQ.exe
 
 Khác biệt vs cup_bot.py:
-  - Engine: ForgeQi (C++ native, engine cờ úp độc lập, không cần NNUE)
+  - Engine: ZaiQi (C++ native, engine cờ úp độc lập, không cần NNUE)
   - Movetime: 5000ms (5s/nước)
   - Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork-and-think)
   - BAG updates: gửi kèm moves list để Jieqi sync state
@@ -113,10 +113,10 @@ GAME_ID = 'mystery_xiangqi'
 PLACE_PATH = 'Lobby.mystery_xiangqi.0'
 
 # === ENGINE CONFIG ===
-# ForgeQi — engine cờ úp độc lập (UCI), classical eval, không cần NNUE
-FORGEQI_BINARY_CANDIDATES = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "forgeqi"),
-    "./forgeqi",
+# ZaiQi — engine cờ úp độc lập viết riêng cho repo này
+ZAIQI_BINARY_CANDIDATES = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "zaiqi"),
+    "./zaiqi",
 ]
 
 # Engine search budget. This is consumed by get_best_move(), not a delay before
@@ -601,9 +601,9 @@ class XiangqiBoardTracker:
 
 
 class JieqiEngine:
-    """Wrapper quanh ForgeQi binary (engine cờ úp độc lập).
+    """Wrapper quanh ZaiQi binary (engine cờ úp độc lập).
     
-    ForgeQi hiểu quân úp (X/x), reveal suffix, túi quân (BAG) qua FEN
+    ZaiQi hiểu quân úp (X/x), reveal suffix, túi quân (BAG) qua FEN
     FEN format (X/x cho quân úp + BAG) NATIVELY.
     
     Không cần fork-and-think như cppjieqi wrapper — engine ổn định, không crash,
@@ -628,21 +628,21 @@ class JieqiEngine:
         self._lines_lock = threading.Lock()
 
         # Find binary
-        for path in FORGEQI_BINARY_CANDIDATES:
+        for path in ZAIQI_BINARY_CANDIDATES:
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 self.binary_path = path
                 break
         if not self.binary_path:
-            print(f"[ENGINE] ❌ Không tìm thấy forgeqi binary. Đã thử: {FORGEQI_BINARY_CANDIDATES}")
+            print(f"[ENGINE] ❌ Không tìm thấy zaiqi binary. Đã thử: {ZAIQI_BINARY_CANDIDATES}")
             self.engine = False
             return
 
-        print(f"[ENGINE] 🎯 forgeqi = {self.binary_path}")
+        print(f"[ENGINE] 🎯 zaiqi = {self.binary_path}")
         self._init_engine()
         self.engine = self.proc is not None
 
     def _init_engine(self):
-        """Start forgeqi as subprocess."""
+        """Start zaiqi as subprocess."""
         self._pondering = False       # ★ PONDER: process mới → hết trạng thái ponder
         self._ponder_moves = None
         self._ponder_pred = None
@@ -724,7 +724,7 @@ class JieqiEngine:
             self._kill()
             return
 
-        # ForgeQi: classical eval tích hợp sẵn — KHÔNG cần NNUE/EvalFile.
+        # ZaiQi dùng classical evaluation tích hợp sẵn — không cần NNUE.
         with self.engine_lock:
             try:
                 _threads = max(1, min(4, (os.cpu_count() or 2)))
@@ -741,7 +741,7 @@ class JieqiEngine:
             self._kill()
             return
 
-        print(f"[ENGINE] ✅ forgeqi ready | Threads={_threads} Hash=256")
+        print(f"[ENGINE] ✅ zaiqi ready | Threads={_threads} Hash=256")
 
     def _wait_for_line(self, prefix, timeout=10):
         t0 = time.time()
@@ -787,13 +787,13 @@ class JieqiEngine:
                       banned=()):
         """Send position + go infinite, wait movetime, then stop.
         
-        ForgeQi engine:
+        ZaiQi engine:
         - Does NOT support 'go movetime' (bug in jieqi branch).
         - Must use 'go infinite' + 'stop' pattern.
-        - FEN CÓ trường BAG (A2B2...) — ForgeQi parse trực tiếp.
+        - FEN CÓ trường BAG (A2B2...) — ZaiQi parse trực tiếp.
         - Moves WITH reveal suffix (e.g. "c3c4R") are supported.
         - banned: các nước bị server reject — gửi 'banmoves' để engine chọn
-          nước KHÁC ngay từ đầu (hỗ trợ bởi ForgeQi; engine
+          nước KHÁC ngay từ đầu (hỗ trợ bởi ZaiQi; engine
           không hỗ trợ sẽ bỏ qua lệnh lạ một cách an toàn).
         """
         if not self.alive():
@@ -810,7 +810,7 @@ class JieqiEngine:
             self._stdout_lines.clear()
 
         # ★ Use "position startpos moves ..." instead of "position fen ..."
-        # ForgeQi's "startpos" = mystery xiangqi initial position (same as cup_bot).
+        # ZaiQi's "startpos" = mystery xiangqi initial position (same as cup_bot).
         # This avoids ALL FEN/BAG/case/side convention issues.
         # Ưu tiên FEN đầy đủ (đường chính), startpos+moves chỉ là dự phòng.
         # Moves WITH reveal suffix (e.g. "c3c4R") are supported by ForgeQi.
@@ -826,7 +826,7 @@ class JieqiEngine:
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
-                # ★ REJECT-RECOVERY: cấm các nước bị server reject (ForgeQi
+                # ★ REJECT-RECOVERY: cấm các nước bị server reject (ZaiQi
                 # đều hỗ trợ; engine khác bỏ qua an toàn)
                 if banned:
                     ban_cmd = "banmoves " + " ".join(m[:4] for m in banned)
@@ -1624,7 +1624,7 @@ class JieqiCupBot:
                   f"my_slot={my_slot_id} | first={first_turn_slot_id} | "
                   f"flip={self.board.flip}")
             
-            # (ForgeQi không cần setflip — bot tự dựng FEN đúng hướng)
+            # (ZaiQi không cần setflip — bot tự dựng FEN đúng hướng)
         except Exception as e:
             print(f"[START_MATCH ERROR] {e}")
             traceback.print_exc()
