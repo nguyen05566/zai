@@ -1598,11 +1598,8 @@ class JieqiCupBot:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
 
-        # Movetime: 2s/move — engine nghĩ nhanh hơn (depth thấp hơn chút)
-        # Cap để còn thời gian fallback nếu bị reject
-        movetime_ms = min(3000, int((remain - 3.0) * 1000))
-        if movetime_ms < 2500:
-            movetime_ms = max(2500, int(remain * 2500))
+        # Movetime CỨNG 3s — luôn 3000ms, không đổi theo thời gian còn lại
+        movetime_ms = 3000
 
         fen, moves = self.board.get_current_fen()
 
