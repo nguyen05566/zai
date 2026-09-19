@@ -5,12 +5,6 @@ on:
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
-# ★ Queue: phiên cron mới sẽ CHỜ phiên trước KẾT THÚC rồi mới chạy
-# (không hủy giữa chừng ván — tránh 2 process cùng tài khoản)
-concurrency:
-  group: cup-bot-jieqi
-  cancel-in-progress: false
-
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -25,18 +19,23 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install Python dependency
-      run: pip install websocket-client
-
-    # Engine và NNUE đã nằm trong repo; không clone, build hoặc tải thêm.
-    - name: Prepare bundled engine and NNUE
+    - name: Install build dependencies
       run: |
-        chmod +x pikajieqi-native verify_engine.sh
-        test -x pikajieqi-native
-        test -s zai_jieqi_master.nnue
-
-    - name: Verify bundled engine and NNUE with Cờ Úp protocol
-      run: bash verify_engine.sh
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential unrar
+    
+    - name: Install Python dependencies
+      run: |
+        pip install websocket-client requests
+    
+    - name: Build PikaJieQi engine
+      run: |
+        bash build_engine.sh
+    
+    - name: Verify engine
+      run: |
+        echo "uci" | ./pikajieqi-native | head -3
+        ls -la pikajieqi-native pikafish.nnue
     
     - name: Run cup bot
       env:
