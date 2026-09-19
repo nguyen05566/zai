@@ -25,40 +25,18 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install build dependencies
+    - name: Install Python dependency
+      run: pip install websocket-client
+
+    # Engine và NNUE đã nằm trong repo; không clone, build hoặc tải thêm.
+    - name: Prepare bundled engine and NNUE
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential
-    
-    - name: Install Python dependencies
-      run: |
-        pip install websocket-client requests
-    
-    - name: Build official Pikafish jieqi_old engine
-      run: |
-        bash build_engine.sh
-    
-    - name: Verify engine
-      run: |
-        uci_output=$(printf 'uci\nquit\n' | ./pikajieqi-native)
-        echo "$uci_output"
-        grep -q 'option name Threads type spin' <<< "$uci_output"
-        grep -q 'option name Hash type spin' <<< "$uci_output"
-        grep -q 'option name Ponder type check' <<< "$uci_output"
-        grep -q 'option name EvalFile type string' <<< "$uci_output"
-        ls -la pikajieqi-native pikafish.nnue
-        {
-          echo "uci"
-          echo "setoption name Threads value 4"
-          echo "setoption name Hash value 1024"
-          echo "setoption name Ponder value true"
-          echo "setoption name EvalFile value $PWD/pikafish.nnue"
-          echo "setoption name MultiPV value 1"
-          echo "isready"
-          sleep 2
-          echo "quit"
-        } | ./pikajieqi-native 2>&1 | tee /tmp/pikafish-nnue.log
-        grep -q "readyok" /tmp/pikafish-nnue.log
+        chmod +x pikajieqi-native verify_engine.sh
+        test -x pikajieqi-native
+        test -s zai_jieqi_master.nnue
+
+    - name: Verify bundled engine and NNUE with Cờ Úp protocol
+      run: bash verify_engine.sh
     
     - name: Run cup bot
       env:
