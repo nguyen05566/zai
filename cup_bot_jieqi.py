@@ -121,7 +121,7 @@ PIKAJIEQI_BINARY_CANDIDATES = [
 ]
 
 ENGINE_MULTIPV = 1
-MIN_MOVE_SECONDS = 2.0
+MIN_MOVE_SECONDS = 3.0
 MOVE_DEADLINE_SECONDS = 30.0
 MAX_SAFE_MOVES = 250
 TRUST_ENGINE_AFTER = 100
@@ -781,7 +781,7 @@ class JieqiEngine:
 
         # Wait for bestmove (should come within 2s after stop)
         t0 = time.time()
-        timeout = 5.0
+        timeout = 2.0
         while time.time() - t0 < timeout:
             if self._latest_bestmove:
                 self._engine_searching = False
@@ -1600,9 +1600,9 @@ class JieqiCupBot:
 
         # Movetime: 2s/move — engine nghĩ nhanh hơn (depth thấp hơn chút)
         # Cap để còn thời gian fallback nếu bị reject
-        movetime_ms = min(2000, int((remain - 3.0) * 1000))
-        if movetime_ms < 1500:
-            movetime_ms = max(1500, int(remain * 500))
+        movetime_ms = min(3000, int((remain - 3.0) * 1000))
+        if movetime_ms < 2500:
+            movetime_ms = max(2500, int(remain * 2500))
 
         fen, moves = self.board.get_current_fen()
 
