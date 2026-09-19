@@ -89,11 +89,9 @@ class _UrllibSession:
 requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
-# Không lưu thông tin đăng nhập trong source công khai. GitHub Actions truyền
-# CARO_USER19/CARO_PASSWD19 từ repository secrets.
+# Chỉ đọc thông tin đăng nhập từ GitHub Actions secrets.
 CARO_USER_DIRECT = ""
 CARO_PASSWD_DIRECT = ""
-
 
 def _clean_env(val, default):
     if val and str(val).strip():
@@ -727,16 +725,12 @@ class JieqiEngine:
 
         # Dùng NNUE đóng gói sẵn trong repo để workflow không phải tải mạng
         # riêng ở mỗi lần chạy.
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        # Ưu tiên net train mới nhất, rồi alias master, rồi pikafish.nnue
-        _nnue_candidates = [
-            os.path.join(base_dir, "zai_cup_boost_v1.nnue"),
-            os.path.join(base_dir, "zai_jieqi_master.nnue"),
-            os.path.join(base_dir, "pikafish.nnue"),
-        ]
-        nnue_path = next((p for p in _nnue_candidates if os.path.isfile(p)), _nnue_candidates[0])
+        # Dùng đúng NNUE đóng gói sẵn trong repo; không tải từ mạng.
+        nnue_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "zai_jieqi_master.nnue"
+        )
         if not os.path.isfile(nnue_path):
-            print(f"[ENGINE] ❌ Không tìm thấy NNUE (thử zai_cup_boost_v1 / zai_jieqi_master / pikafish): {nnue_path}")
+            print(f"[ENGINE] ❌ Thiếu NNUE trong repo: {nnue_path}")
             self._kill()
             return
         with self.engine_lock:

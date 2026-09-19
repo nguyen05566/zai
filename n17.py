@@ -89,9 +89,9 @@ class _UrllibSession:
 requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
-CARO_USER_DIRECT = "arena5"
-CARO_PASSWD_DIRECT = "nhat123456"
-
+# Chỉ đọc thông tin đăng nhập từ GitHub Actions secrets.
+CARO_USER_DIRECT = ""
+CARO_PASSWD_DIRECT = ""
 
 def _clean_env(val, default):
     if val and str(val).strip():
@@ -99,8 +99,8 @@ def _clean_env(val, default):
     return default
 
 
-USER = _clean_env(os.environ.get("CARO_USER19"), CARO_USER_DIRECT)
-PASSWD = _clean_env(os.environ.get("CARO_PASSWD19"), CARO_PASSWD_DIRECT)
+USER = _clean_env(os.environ.get("CARO_USER17"), CARO_USER_DIRECT)
+PASSWD = _clean_env(os.environ.get("CARO_PASSWD17"), CARO_PASSWD_DIRECT)
 COOKIE = ""
 
 WS_URL = "wss://gamevh.net/ws/gameServer"
@@ -725,14 +725,14 @@ class JieqiEngine:
 
         # Configure engine for strength while keeping runner resource use safe.
         # Ponder must be enabled because the bot uses `go ponder infinite`.
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        # Ưu tiên net train mới: zai_cup_boost_v1 → zai_jieqi_master → pikafish
-        _nnue_candidates = [
-            os.path.join(base_dir, "zai_cup_boost_v1.nnue"),
-            os.path.join(base_dir, "zai_jieqi_master.nnue"),
-            os.path.join(base_dir, "pikafish.nnue"),
-        ]
-        nnue_path = next((p for p in _nnue_candidates if os.path.isfile(p)), _nnue_candidates[-1])
+        # Dùng đúng NNUE đóng gói sẵn trong repo; không tải từ mạng.
+        nnue_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "zai_jieqi_master.nnue"
+        )
+        if not os.path.isfile(nnue_path):
+            print(f"[ENGINE] ❌ Thiếu NNUE trong repo: {nnue_path}")
+            self._kill()
+            return
         with self.engine_lock:
             try:
                 _threads = max(1, min(4, (os.cpu_count() or 2)))
