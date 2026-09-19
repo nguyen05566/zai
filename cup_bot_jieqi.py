@@ -796,7 +796,8 @@ class JieqiEngine:
         self._init_engine()
         return self.alive()
 
-    def get_best_move(self, fen, moves, movetime_ms=int(ENGINE_THINK_SECONDS * 1000)):
+    def get_best_move(self, fen, moves, movetime_ms=int(ENGINE_THINK_SECONDS * 1000),
+                      banned=()):
         """Send position + go infinite, wait movetime, then stop.
         
         PikaJieQi native engine:
@@ -804,6 +805,9 @@ class JieqiEngine:
         - Must use 'go infinite' + 'stop' pattern.
         - FEN must NOT include BAG — PikaJieQi auto-generates it from board.
         - Moves WITH reveal suffix (e.g. "c3c4R") are supported.
+        - banned: các nước bị server reject — gửi 'banmoves' để engine chọn
+          nước KHÁC ngay từ đầu (hỗ trợ bởi PikaJieQi + OpenJieqi; engine
+          không hỗ trợ sẽ bỏ qua lệnh lạ một cách an toàn).
         """
         if not self.alive():
             if not self.restart():
@@ -835,6 +839,12 @@ class JieqiEngine:
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
+                # ★ REJECT-RECOVERY: cấm các nước bị server reject (PikaJieQi +
+                # OpenJieqi đều hỗ trợ 'banmoves'; engine khác bỏ qua an toàn)
+                if banned:
+                    ban_cmd = "banmoves " + " ".join(m[:4] for m in banned)
+                    self.proc.stdin.write(ban_cmd + "\n")
+                    self.proc.stdin.flush()
                 # ★ 'go movetime' doesn't work in PikaJieQi jieqi branch
                 # Use 'go infinite' + 'stop' after movetime
                 self.proc.stdin.write("go infinite\n")
@@ -1948,12 +1958,14 @@ class JieqiCupBot:
             print(f"[PONDER] ponderhit lỗi ({e}) — fallback search thường", flush=True)
             raw = None
         if not raw:
-            raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
+            raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms,
+                                            banned=self._rejected_moves)
 
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
-                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
+                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms,
+                                                banned=self._rejected_moves)
             if not raw:
                 print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True)
                 return
