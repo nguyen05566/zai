@@ -2,7 +2,7 @@
 cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (cppjieqi) thay cho PKJQ.exe
 
 Khác biệt vs cup_bot.py:
-  - Engine: pikajieqi-native (C++ native, không cần wine)
+  - Engine: ForgeQi (C++ native, engine cờ úp độc lập, không cần NNUE)
   - Movetime: 5000ms (5s/nước)
   - Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork-and-think)
   - BAG updates: gửi kèm moves list để Jieqi sync state
@@ -113,9 +113,10 @@ GAME_ID = 'mystery_xiangqi'
 PLACE_PATH = 'Lobby.mystery_xiangqi.0'
 
 # === ENGINE CONFIG ===
-# pikajieqi-native (cppjieqi wrapper) — C++ native, no wine needed
-PIKAJIEQI_BINARY_CANDIDATES = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
+# ForgeQi — engine cờ úp độc lập (UCI), classical eval, không cần NNUE
+FORGEQI_BINARY_CANDIDATES = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "forgeqi"),
+    "./forgeqi",
 ]
 
 # Engine search budget. This is consumed by get_best_move(), not a delay before
@@ -600,9 +601,9 @@ class XiangqiBoardTracker:
 
 
 class JieqiEngine:
-    """Wrapper quanh PikaJieQi Linux native binary.
+    """Wrapper quanh ForgeQi binary (engine cờ úp độc lập).
     
-    PikaJieQi là fork của Pikafish với jieqi branch — hỗ trợ mystery_xiangqi
+    ForgeQi hiểu quân úp (X/x), reveal suffix, túi quân (BAG) qua FEN
     FEN format (X/x cho quân úp + BAG) NATIVELY.
     
     Không cần fork-and-think như cppjieqi wrapper — engine ổn định, không crash,
@@ -627,21 +628,21 @@ class JieqiEngine:
         self._lines_lock = threading.Lock()
 
         # Find binary
-        for path in PIKAJIEQI_BINARY_CANDIDATES:
+        for path in FORGEQI_BINARY_CANDIDATES:
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 self.binary_path = path
                 break
         if not self.binary_path:
-            print(f"[ENGINE] ❌ Không tìm thấy pikajieqi-native binary. Đã thử: {PIKAJIEQI_BINARY_CANDIDATES}")
+            print(f"[ENGINE] ❌ Không tìm thấy forgeqi binary. Đã thử: {FORGEQI_BINARY_CANDIDATES}")
             self.engine = False
             return
 
-        print(f"[ENGINE] 🎯 pikajieqi-native = {self.binary_path}")
+        print(f"[ENGINE] 🎯 forgeqi = {self.binary_path}")
         self._init_engine()
         self.engine = self.proc is not None
 
     def _init_engine(self):
-        """Start pikajieqi-native as subprocess."""
+        """Start forgeqi as subprocess."""
         self._pondering = False       # ★ PONDER: process mới → hết trạng thái ponder
         self._ponder_moves = None
         self._ponder_pred = None
@@ -723,25 +724,12 @@ class JieqiEngine:
             self._kill()
             return
 
-        # Dùng NNUE đóng gói sẵn trong repo để workflow không phải tải mạng
-        # riêng ở mỗi lần chạy.
-        # Dùng đúng NNUE đóng gói sẵn trong repo; không tải từ mạng.
-        nnue_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "zai_jieqi_master.nnue"
-        )
-        if not os.path.isfile(nnue_path):
-            print(f"[ENGINE] ❌ Thiếu NNUE trong repo: {nnue_path}")
-            self._kill()
-            return
+        # ForgeQi: classical eval tích hợp sẵn — KHÔNG cần NNUE/EvalFile.
         with self.engine_lock:
             try:
                 _threads = max(1, min(4, (os.cpu_count() or 2)))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
-                # 1 GiB transposition table for deeper reuse in hidden-piece searches.
-                self.proc.stdin.write("setoption name Hash value 1024\n")
-                self.proc.stdin.write("setoption name Ponder value true\n")
-                self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
-                self.proc.stdin.write("setoption name MultiPV value 1\n")
+                self.proc.stdin.write("setoption name Hash value 256\n")
                 self.proc.stdin.write("isready\n")
                 self.proc.stdin.flush()
             except Exception as e:
@@ -753,8 +741,7 @@ class JieqiEngine:
             self._kill()
             return
 
-        print(f"[ENGINE] ✅ pikajieqi-native ready | Threads={_threads} Hash=1024 "
-              f"Ponder=true MultiPV=1 EvalFile={nnue_path}")
+        print(f"[ENGINE] ✅ forgeqi ready | Threads={_threads} Hash=256")
 
     def _wait_for_line(self, prefix, timeout=10):
         t0 = time.time()
@@ -800,13 +787,13 @@ class JieqiEngine:
                       banned=()):
         """Send position + go infinite, wait movetime, then stop.
         
-        PikaJieQi native engine:
+        ForgeQi engine:
         - Does NOT support 'go movetime' (bug in jieqi branch).
         - Must use 'go infinite' + 'stop' pattern.
-        - FEN must NOT include BAG — PikaJieQi auto-generates it from board.
+        - FEN CÓ trường BAG (A2B2...) — ForgeQi parse trực tiếp.
         - Moves WITH reveal suffix (e.g. "c3c4R") are supported.
         - banned: các nước bị server reject — gửi 'banmoves' để engine chọn
-          nước KHÁC ngay từ đầu (hỗ trợ bởi PikaJieQi + OpenJieqi; engine
+          nước KHÁC ngay từ đầu (hỗ trợ bởi ForgeQi; engine
           không hỗ trợ sẽ bỏ qua lệnh lạ một cách an toàn).
         """
         if not self.alive():
@@ -823,10 +810,10 @@ class JieqiEngine:
             self._stdout_lines.clear()
 
         # ★ Use "position startpos moves ..." instead of "position fen ..."
-        # PikaJieQi's "startpos" = mystery xiangqi initial position (same as cup_bot).
+        # ForgeQi's "startpos" = mystery xiangqi initial position (same as cup_bot).
         # This avoids ALL FEN/BAG/case/side convention issues.
-        # PikaJieQi auto-generates BAG from board and tracks reveals.
-        # Moves WITH reveal suffix (e.g. "c3c4R") are supported by PikaJieQi.
+        # Ưu tiên FEN đầy đủ (đường chính), startpos+moves chỉ là dự phòng.
+        # Moves WITH reveal suffix (e.g. "c3c4R") are supported by ForgeQi.
         try:
             # ★ FIX ~20-nước: ưu tiên FEN đầy đủ — chính xác tuyệt đối, miễn nhiễm
             # lỗi parser moves của engine (nước lật, quân úp sai hình học phỏng đoán)
@@ -839,13 +826,13 @@ class JieqiEngine:
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
-                # ★ REJECT-RECOVERY: cấm các nước bị server reject (PikaJieQi +
-                # OpenJieqi đều hỗ trợ 'banmoves'; engine khác bỏ qua an toàn)
+                # ★ REJECT-RECOVERY: cấm các nước bị server reject (ForgeQi
+                # đều hỗ trợ; engine khác bỏ qua an toàn)
                 if banned:
                     ban_cmd = "banmoves " + " ".join(m[:4] for m in banned)
                     self.proc.stdin.write(ban_cmd + "\n")
                     self.proc.stdin.flush()
-                # ★ 'go movetime' doesn't work in PikaJieQi jieqi branch
+                # ★ Dùng 'go infinite' + 'stop' (thống nhất cho mọi engine)
                 # Use 'go infinite' + 'stop' after movetime
                 self.proc.stdin.write("go infinite\n")
                 self.proc.stdin.flush()
@@ -1637,15 +1624,7 @@ class JieqiCupBot:
                   f"my_slot={my_slot_id} | first={first_turn_slot_id} | "
                   f"flip={self.board.flip}")
             
-            # ★ Tell engine about flip state
-            if self.engine and self.engine.alive():
-                try:
-                    with self.engine.engine_lock:
-                        flip_str = "true" if self.board.flip else "false"
-                        self.engine.proc.stdin.write(f"setflip {flip_str}\n")
-                        self.engine.proc.stdin.flush()
-                except Exception:
-                    pass
+            # (ForgeQi không cần setflip — bot tự dựng FEN đúng hướng)
         except Exception as e:
             print(f"[START_MATCH ERROR] {e}")
             traceback.print_exc()

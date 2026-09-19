@@ -28,9 +28,8 @@ jobs:
     - name: Install Python dependency
       run: pip install websocket-client
 
-    # ★ Engine chính: OpenJieqi (clone + make ~3s, không cần NNUE).
-    # Fallback: official Pikafish jieqi_old + trained NNUE (build_engine.sh tự xử lý).
-    - name: Build engine
+    # ★ Engine: ForgeQi (độc lập, classical eval, không cần NNUE).
+    - name: Build ForgeQi engine
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq build-essential
@@ -38,16 +37,11 @@ jobs:
 
     - name: Verify engine
       run: |
-        echo "Engine: $(cat engine_brand.txt)"
-        echo "uci" | ./pikajieqi-native | head -3
-        if grep -q OpenJieqi engine_brand.txt; then
-          { echo uci; echo isready; echo "position startpos"; echo "go infinite"; sleep 2; echo stop; sleep 1; echo quit; } | timeout 20 ./pikajieqi-native | tee /tmp/v.log
-          grep -q uciok /tmp/v.log
-          grep -q readyok /tmp/v.log
-          grep -Eq '^bestmove [a-i][0-9][a-i][0-9]' /tmp/v.log
-        else
-          bash verify_engine.sh
-        fi
+        echo "uci" | ./forgeqi | head -3
+        { echo uci; echo isready; echo "position startpos"; echo "go infinite"; sleep 2; echo stop; sleep 1; echo quit; } | timeout 20 ./forgeqi | tee /tmp/v.log
+        grep -q uciok /tmp/v.log
+        grep -q readyok /tmp/v.log
+        grep -Eq '^bestmove [a-i][0-9][a-i][0-9]' /tmp/v.log
     
     - name: Run cup bot
       env:

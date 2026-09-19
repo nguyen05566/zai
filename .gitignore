@@ -1,6 +1,4 @@
-pikajieqi-native
-pikafish.nnue
+forgeqi
 *.pyc
 __pycache__/
 .env
-engine_brand.txt
