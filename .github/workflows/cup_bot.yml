@@ -1,15 +1,9 @@
-name: Cờ Úp Bot (ZaiQi)
+name: n17
 
 on:
   schedule:
     - cron: '0 */6 * * *'
   workflow_dispatch:
-
-# ★ Queue: phiên cron mới sẽ CHỜ phiên trước KẾT THÚC rồi mới chạy
-# (không hủy giữa chừng ván — tránh 2 process cùng tài khoản)
-concurrency:
-  group: cup-bot-jieqi
-  cancel-in-progress: false
 
 jobs:
   run-bot:
@@ -25,28 +19,28 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install Python dependency
-      run: pip install websocket-client
-
-    # ★ Engine: ZaiQi (độc lập, classical eval, không cần NNUE).
-    - name: Build ZaiQi engine
+    - name: Install build dependencies
       run: |
         sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential
+        sudo apt-get install -y -qq build-essential unrar
+    
+    - name: Install Python dependencies
+      run: |
+        pip install websocket-client requests
+    
+    - name: Build PikaJieQi engine
+      run: |
         bash build_engine.sh
-
+    
     - name: Verify engine
       run: |
-        echo "uci" | ./zaiqi | head -3
-        { echo uci; echo isready; echo "position startpos"; echo "go infinite"; sleep 2; echo stop; sleep 1; echo quit; } | timeout 20 ./zaiqi | tee /tmp/v.log
-        grep -q uciok /tmp/v.log
-        grep -q readyok /tmp/v.log
-        grep -Eq '^bestmove [a-i][0-9][a-i][0-9]' /tmp/v.log
+        echo "uci" | ./pikajieqi-native | head -3
+        ls -la pikajieqi-native pikafish.nnue
     
     - name: Run cup bot
       env:
         CARO_USER19: ${{ secrets.CARO_USER19 }}
         CARO_PASSWD19: ${{ secrets.CARO_PASSWD19 }}
       run: |
-        python3 -u cup_bot_jieqi.py
+        python3 -u n17.py
       timeout-minutes: 340

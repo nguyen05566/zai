@@ -28,20 +28,22 @@ jobs:
     - name: Install Python dependency
       run: pip install websocket-client
 
-    # ★ Engine: ZaiQi (độc lập, classical eval, không cần NNUE).
-    - name: Build ZaiQi engine
+    - name: Check bundled engine and NNUE files
+      shell: bash
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential
-        bash build_engine.sh
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}"
+        ls -lah
+        test -f "./pikajieqi-native"
+        test -f "./verify_engine.sh"
+        test -s "./zai_jieqi_master.nnue"
+        chmod +x "./pikajieqi-native" "./verify_engine.sh"
 
-    - name: Verify engine
+    - name: Verify bundled engine and NNUE with Cờ Úp protocol
+      shell: bash
       run: |
-        echo "uci" | ./zaiqi | head -3
-        { echo uci; echo isready; echo "position startpos"; echo "go infinite"; sleep 2; echo stop; sleep 1; echo quit; } | timeout 20 ./zaiqi | tee /tmp/v.log
-        grep -q uciok /tmp/v.log
-        grep -q readyok /tmp/v.log
-        grep -Eq '^bestmove [a-i][0-9][a-i][0-9]' /tmp/v.log
+        cd "${GITHUB_WORKSPACE}"
+        bash "./verify_engine.sh"
     
     - name: Run cup bot
       env:
