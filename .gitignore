@@ -3,3 +3,4 @@ pikafish.nnue
 *.pyc
 __pycache__/
 .env
+engine_brand.txt

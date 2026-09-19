@@ -28,22 +28,26 @@ jobs:
     - name: Install Python dependency
       run: pip install websocket-client
 
-    - name: Check bundled engine and NNUE files
-      shell: bash
+    # ★ Engine chính: OpenJieqi (clone + make ~3s, không cần NNUE).
+    # Fallback: official Pikafish jieqi_old + trained NNUE (build_engine.sh tự xử lý).
+    - name: Build engine
       run: |
-        set -euo pipefail
-        cd "${GITHUB_WORKSPACE}"
-        ls -lah
-        test -f "./pikajieqi-native"
-        test -f "./verify_engine.sh"
-        test -s "./zai_jieqi_master.nnue"
-        chmod +x "./pikajieqi-native" "./verify_engine.sh"
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential
+        bash build_engine.sh
 
-    - name: Verify bundled engine and NNUE with Cờ Úp protocol
-      shell: bash
+    - name: Verify engine
       run: |
-        cd "${GITHUB_WORKSPACE}"
-        bash "./verify_engine.sh"
+        echo "Engine: $(cat engine_brand.txt)"
+        echo "uci" | ./pikajieqi-native | head -3
+        if grep -q OpenJieqi engine_brand.txt; then
+          { echo uci; echo isready; echo "position startpos"; echo "go infinite"; sleep 2; echo stop; sleep 1; echo quit; } | timeout 20 ./pikajieqi-native | tee /tmp/v.log
+          grep -q uciok /tmp/v.log
+          grep -q readyok /tmp/v.log
+          grep -Eq '^bestmove [a-i][0-9][a-i][0-9]' /tmp/v.log
+        else
+          bash verify_engine.sh
+        fi
     
     - name: Run cup bot
       env:
