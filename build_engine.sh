@@ -1,29 +1,38 @@
 #!/bin/bash
-# Build ZaiQi: an independent cờ úp UCI engine written for this bot.
-set -euo pipefail
+# build_engine.sh — Build PikaJieQi Linux native + download NNUE
+set -ex
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+REF=$(head -1 "$SCRIPT_DIR/pikafish-jieqi.ref" | tr -d '[:space:]')
+echo "Building PikaJieQi from commit $REF..."
 
-g++ -std=c++17 -O3 -pthread -Wall -Wextra \
-  -o "$SCRIPT_DIR/zaiqi" "$SCRIPT_DIR/zaiqi_engine.cpp"
-chmod +x "$SCRIPT_DIR/zaiqi"
+# Clone the fork (full clone to reach pinned commit)
+git clone https://github.com/brianhliou/pikafish-jieqi-wasm /tmp/pikafish-jieqi
+cd /tmp/pikafish-jieqi
+git checkout "$REF"
+echo "Checked out: $(git rev-parse HEAD)"
 
-# Protocol smoke tests.
-printf 'uci\nisready\nquit\n' | "$SCRIPT_DIR/zaiqi" > /tmp/zaiqi-uci.log
-grep -q '^uciok$' /tmp/zaiqi-uci.log
-grep -q '^readyok$' /tmp/zaiqi-uci.log
+# Build
+cd src
+make -j$(nproc) ARCH=x86-64-sse41-popcnt build
 
-{
-  echo uci
-  echo isready
-  echo 'position startpos moves c3c4R h9g7n'
-  echo 'go infinite'
-  sleep 1
-  echo stop
-  sleep 1
-  echo quit
-} | timeout 10 "$SCRIPT_DIR/zaiqi" > /tmp/zaiqi-game.log
-grep -Eq '^bestmove [a-i][0-9][a-i][0-9]' /tmp/zaiqi-game.log
+# Copy binary to repo root
+cp PikaJieQi "$SCRIPT_DIR/pikajieqi-native"
+chmod +x "$SCRIPT_DIR/pikajieqi-native"
 
-echo "ZaiQi built successfully"
-ls -la "$SCRIPT_DIR/zaiqi"
+# Download NNUE from Pikafish releases (not included in jieqi repo)
+if [ ! -f "$SCRIPT_DIR/pikafish.nnue" ]; then
+    echo "Downloading pikafish.nnue..."
+    cd /tmp
+    curl -sL "https://github.com/official-pikafish/Pikafish/releases/download/Pikafish-2026-09-06/Pikafish.2026-09-06.7z" -o pk.7z
+    mkdir -p pk_extract
+    unrar x -y pk.7z pk_extract/ > /dev/null 2>&1 || true
+    # Try 7z if unrar not available
+    if [ ! -f pk_extract/pikafish.nnue ]; then
+        7z x -y pk.7z -opk_extract/ > /dev/null 2>&1 || true
+    fi
+    cp pk_extract/pikafish.nnue "$SCRIPT_DIR/pikafish.nnue"
+fi
+
+echo "✅ PikaJieQi built successfully"
+ls -la "$SCRIPT_DIR/pikajieqi-native" "$SCRIPT_DIR/pikafish.nnue"

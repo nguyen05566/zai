@@ -3,7 +3,7 @@ cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (cppjieqi) thay cho PKJQ
 
 Khác biệt vs cup_bot.py:
   - Engine: pikajieqi-native (C++ native, không cần wine)
-  - Movetime: 5000ms (5s/nước)
+  - Movetime: 2000ms (~2s/nước cho nhanh)
   - Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork-and-think)
   - BAG updates: gửi kèm moves list để Jieqi sync state
 """
@@ -89,9 +89,9 @@ class _UrllibSession:
 requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
-# Chỉ đọc thông tin đăng nhập từ GitHub Actions secrets.
-CARO_USER_DIRECT = ""
-CARO_PASSWD_DIRECT = ""
+CARO_USER_DIRECT = "nguyen13"
+CARO_PASSWD_DIRECT = "******"
+
 
 def _clean_env(val, default):
     if val and str(val).strip():
@@ -116,25 +116,23 @@ PLACE_PATH = 'Lobby.mystery_xiangqi.0'
 # pikajieqi-native (cppjieqi wrapper) — C++ native, no wine needed
 PIKAJIEQI_BINARY_CANDIDATES = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
 ]
 
-# Engine search budget. This is consumed by get_best_move(), not a delay before
-# sending the already-selected move.
-ENGINE_THINK_SECONDS = 5.0
+ENGINE_MULTIPV = 1
+MIN_MOVE_SECONDS = 2.0
 MOVE_DEADLINE_SECONDS = 30.0
-MAX_ENGINE_RESTARTS_PER_GAME = 1  # mỗi ván được restart engine tối đa 2 lần (reset lại quota đầu mỗi ván)
+MAX_SAFE_MOVES = 250
+TRUST_ENGINE_AFTER = 100
+MAX_ENGINE_RESTARTS_PER_GAME = 2  # mỗi ván được restart engine tối đa 2 lần (reset lại quota đầu mỗi ván)
 MOVE_DEDUP_WINDOW = 0.1
 KICK_MODE = "when_lose"
 KICK_DELAY = 5.0
-SIT_ALONE_TIMEOUT = 600.0  # ngồi chờ đối thủ trong bàn tối đa 10 phút rồi mới rời bàn
-BOT_BET_XU = 10000
-
-# ★ RECONNECT: cấu hình kết nối lại nhanh hơn
-RECONNECT_FAST_DELAY = 2.0       # chờ 2s trước khi reconnect (thay vì exponential)
-RECONNECT_FAST_MAX = 5           # reconnect nhanh 5 lần đầu
-RECONNECT_INGAME_DELAY = 1.0     # in-game disconnect → reconnect ngay sau1s
+SIT_ALONE_TIMEOUT = 300.0  # ngồi chờ đối thủ trong bàn tối đa 5 phút rồi mới rời bàn
+BOT_BET_XU = 20000
 BOT_USE_CREATE_TABLE = True
-BOT_MATCH_DURATION = '10'         # tạo bàn 10 phút
+BOT_MATCH_DURATION = '5'
 BOT_TURN_DURATION = '30'
 BOT_ACC_DURATION = '0'
 BOT_BLOCK_SOFTWARE = '0'
@@ -237,8 +235,43 @@ def is_block_software_message(raw_bytes):
     return False
 
 
-# ★ ĐÃ BỎ cơ chế nhận biết đồng đội (is_family_bot + registry active tables):
-# bots giờ chơi với bất kỳ ai, kể cả nhau
+ACTIVE_TABLES_FILE = os.path.join(tempfile.gettempdir(), "zaro_active_tables.json")
+
+
+def get_active_bot_tables():
+    try:
+        if not os.path.exists(ACTIVE_TABLES_FILE): return {}
+        with open(ACTIVE_TABLES_FILE, 'r') as f:
+            content = f.read().strip()
+            if not content: return {}
+            data = json.loads(content)
+        now = time.time()
+        return {tp: info for tp, info in data.items()
+                if isinstance(info, dict) and now - info.get("timestamp", 0) < 180}
+    except Exception:
+        return {}
+
+
+def register_bot_table(table_path, user):
+    if not table_path: return
+    try:
+        data = get_active_bot_tables()
+        data[table_path] = {"user": user, "timestamp": time.time(), "pid": os.getpid()}
+        with open(ACTIVE_TABLES_FILE, 'w') as f: json.dump(data, f)
+    except Exception:
+        pass
+
+
+def unregister_bot_table(table_path):
+    if not table_path: return
+    try:
+        data = get_active_bot_tables()
+        if table_path in data:
+            data.pop(table_path, None)
+            with open(ACTIVE_TABLES_FILE, 'w') as f: json.dump(data, f)
+    except Exception:
+        pass
+
 
 def fetch_session_info():
     global COOKIE, TOKEN, CURRENT_PLAYER_NICKNAME, CURRENT_PLAYER_ID, PLACE_PATH, _IDENTITY_SYNCED
@@ -386,17 +419,6 @@ INITIAL_BAG = {'A': 2, 'B': 2, 'N': 2, 'R': 2, 'C': 2, 'P': 5,
                'a': 2, 'b': 2, 'n': 2, 'r': 2, 'c': 2, 'p': 5}
 BAG_ORDER = ['A', 'B', 'N', 'R', 'C', 'P', 'a', 'b', 'n', 'r', 'c', 'p']
 
-# ★ FIX ~20-nước: loại quân phỏng đoán theo ô chuẩn (giống bảng BPiece của
-# engine). Engine CRASH khi nhận FEN có X/x ở ô không chuẩn (BPiece lookup
-# trả NO_PIECE_TYPE) → mọi X/x đặt vào FEN phải đảm bảo nằm ở ô chuẩn,
-# nếu không phải thay bằng ký tự phỏng đoán.
-PRESUMED_STD = {}
-for _r, _row in ((0, 'RNBAKABNR'), (2, '.C.....C.'), (3, 'P.P.P.P.P')):
-    for _f, _ch in enumerate(_row):
-        if _ch != '.':
-            PRESUMED_STD[(_f, _r)] = _ch              # phía đỏ (rank 0/2/3)
-            PRESUMED_STD[(_f, 9 - _r)] = _ch.lower()  # phía đen (rank 9/7/6)
-
 UCI_MOVE_RE = re.compile(r'^[a-i]\d[a-i]\d$')
 UCI_MOVE_WITH_SUFFIX_RE = re.compile(r'^[a-i]\d[a-i]\d[a-zA-Z]?$')
 
@@ -450,82 +472,10 @@ class XiangqiBoardTracker:
                 bag[ch] = max(0, bag[ch] - 1)
         return "".join(f"{k}{bag[k]}" for k in BAG_ORDER)
 
-    def current_fen_full(self):
-        """★ FIX bot dừng ~nước 20: FEN đầy đủ (placement + side + BAG) dựng từ
-        start_fen + replay toàn bộ nước (kèm ký tự reveal từ server).
-
-        Engine đứt parse 'position ... moves' khi gặp:
-        - nước LẬT (e3e3 / e3e3R) — from==to không có trong MoveList
-        - quân úp đi SAI hình học loại phỏng đoán (BPiece theo ô chuẩn, vd
-          b0 phỏng là Mã nhưng thật là Xe → b0b5R → to_move = MOVE_NONE)
-        → parser silently vất bỏ CẢ PHẦN SAU → vị trí đóng băng, sai lượt →
-        server reject mọi nước → bot đứng im tới hết giờ.
-        Gửi FEN dựng từ dữ liệu server = chính xác tuyệt đối, miễn nhiễm."""
-        grid = {}
-        r = 9
-        for row in self.start_fen.split('/'):
-            f = 0
-            for ch in row:
-                if ch.isdigit():
-                    f += int(ch)
-                else:
-                    if 0 <= f < 9 and r >= 0:
-                        grid[(f, r)] = ch
-                    f += 1
-            r -= 1
-        # ★ HARDENING: X/x ở ô KHÔNG chuẩn trong start_fen (biến thể server)
-        # làm engine crash → thay bằng quân phỏng đoán an toàn
-        for k, ch in list(grid.items()):
-            if ch in ('X', 'x') and k not in PRESUMED_STD:
-                grid[k] = 'P' if ch == 'X' else 'p'
-        for mv in self.uci_moves:
-            if len(mv) < 4 or not UCI_MOVE_WITH_SUFFIX_RE.match(mv):
-                continue
-            m = mv[:4]
-            suf = mv[4:5] if len(mv) > 4 else None
-            try:
-                frm = (ord(m[0]) - 97, int(m[1]))
-                to = (ord(m[2]) - 97, int(m[3]))
-            except Exception:
-                continue
-            if frm == to:
-                if suf:                     # lật quân có reveal → mở tại chỗ
-                    grid[frm] = suf
-                continue
-            pc = grid.pop(frm, None)
-            if pc is None:
-                continue
-            if suf:
-                grid[to] = suf             # suffix = ký tự THẬT (hoa=đỏ, thường=đen)
-            elif pc in ('X', 'x'):
-                # quân úp đi KHÔNG reveal (corner-case) → không được đặt X ở
-                # ô mới (engine crash nếu ô không chuẩn) → dùng loại phỏng
-                # đoán theo ô GỐC, đúng như BPiece của engine
-                grid[to] = PRESUMED_STD.get(frm, 'P' if pc == 'X' else 'p')
-            else:
-                grid[to] = pc
-        rows = []
-        for rr in range(9, -1, -1):
-            row = ''
-            empty = 0
-            for ff in range(9):
-                ch = grid.get((ff, rr))
-                if ch is None:
-                    empty += 1
-                else:
-                    if empty:
-                        row += str(empty)
-                        empty = 0
-                    row += ch
-            if empty:
-                row += str(empty)
-            rows.append(row)
-        return '/'.join(rows) + f" {self.side_to_move} {self.bag_string()} 0 1"
-
     def get_current_fen(self):
-        """Trả về (FEN đầy đủ, danh sách nước) — FEN dùng cho 'position fen',
-        moves chỉ còn dùng cho logic ponder-hit (so sánh 4 ký tự đầu)."""
-        return self.current_fen_full(), list(self.uci_moves)
+        fen = f"{self.start_fen} {self.bag_string()} {self.start_side} - - 0 1"
+        moves = [m for m in self.uci_moves if UCI_MOVE_WITH_SUFFIX_RE.match(m)]
+        return fen, moves
 
     def set_base(self, board_fen, side='w'):
         board_fen = board_fen.split(' ')[0] if ' ' in board_fen else board_fen
@@ -642,10 +592,6 @@ class JieqiEngine:
 
     def _init_engine(self):
         """Start pikajieqi-native as subprocess."""
-        self._pondering = False       # ★ PONDER: process mới → hết trạng thái ponder
-        self._ponder_moves = None
-        self._ponder_pred = None
-        self._ponder_fen = None
         if self.proc:
             try:
                 self.proc.stdin.write("quit\n")
@@ -723,23 +669,13 @@ class JieqiEngine:
             self._kill()
             return
 
-        # Dùng NNUE đóng gói sẵn trong repo để workflow không phải tải mạng
-        # riêng ở mỗi lần chạy.
-        # Dùng đúng NNUE đóng gói sẵn trong repo; không tải từ mạng.
-        nnue_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "zai_jieqi_master.nnue"
-        )
-        if not os.path.isfile(nnue_path):
-            print(f"[ENGINE] ❌ Thiếu NNUE trong repo: {nnue_path}")
-            self._kill()
-            return
+        # Configure engine — PikaJieQi needs NNUE EvalFile
+        nnue_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikafish.nnue")
         with self.engine_lock:
             try:
-                _threads = max(1, min(4, (os.cpu_count() or 2)))
+                _threads = max(1, min(2, (os.cpu_count() or 2) - 1))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
-                # 1 GiB transposition table for deeper reuse in hidden-piece searches.
-                self.proc.stdin.write("setoption name Hash value 1024\n")
-                self.proc.stdin.write("setoption name Ponder value true\n")
+                self.proc.stdin.write("setoption name Hash value 128\n")
                 self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
                 self.proc.stdin.write("isready\n")
@@ -753,8 +689,7 @@ class JieqiEngine:
             self._kill()
             return
 
-        print(f"[ENGINE] ✅ pikajieqi-native ready | Threads={_threads} Hash=1024 "
-              f"Ponder=true MultiPV=1 EvalFile={nnue_path}")
+        print("[ENGINE] ✅ pikajieqi-native ready")
 
     def _wait_for_line(self, prefix, timeout=10):
         t0 = time.time()
@@ -796,7 +731,7 @@ class JieqiEngine:
         self._init_engine()
         return self.alive()
 
-    def get_best_move(self, fen, moves, movetime_ms=int(ENGINE_THINK_SECONDS * 1000)):
+    def get_best_move(self, fen, moves, movetime_ms=2000):
         """Send position + go infinite, wait movetime, then stop.
         
         PikaJieQi native engine:
@@ -809,10 +744,6 @@ class JieqiEngine:
             if not self.restart():
                 return None
 
-        # ★ PONDER: đang ponder → dừng hẳn (stop + isready drain) rồi mới search
-        if self._pondering:
-            self.stop_ponder()
-
         self._latest_bestmove = None
         self._engine_searching = True
         with self._lines_lock:
@@ -824,14 +755,9 @@ class JieqiEngine:
         # PikaJieQi auto-generates BAG from board and tracks reveals.
         # Moves WITH reveal suffix (e.g. "c3c4R") are supported by PikaJieQi.
         try:
-            # ★ FIX ~20-nước: ưu tiên FEN đầy đủ — chính xác tuyệt đối, miễn nhiễm
-            # lỗi parser moves của engine (nước lật, quân úp sai hình học phỏng đoán)
-            if fen and ' ' in fen:
-                cmd = "position fen " + fen
-            else:
-                cmd = "position startpos"
-                if moves:
-                    cmd += " moves " + " ".join(moves)
+            cmd = "position startpos"
+            if moves:
+                cmd += " moves " + " ".join(moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -844,7 +770,7 @@ class JieqiEngine:
             self._engine_searching = False
             return None
 
-        # Think for the requested budget, then stop the search.
+        # Wait movetime_ms then send stop
         time.sleep(movetime_ms / 1000.0)
         try:
             with self.engine_lock:
@@ -865,8 +791,6 @@ class JieqiEngine:
                         if l.startswith("info") and "depth" in l:
                             m = re.search(r'depth (\d+)', l)
                             if m: self._last_depth = m.group(1)
-                            pv = re.search(r' pv (.+)$', l)          # ★ PONDER
-                            if pv: self._last_pv = pv.group(1).split()
                             sm = re.search(r'score (cp|mate) (-?\d+)', l)
                             if sm:
                                 if sm.group(1) == "mate":
@@ -883,245 +807,6 @@ class JieqiEngine:
         print(f"[ENGINE] bestmove timeout after stop")
         self._engine_searching = False
         return self._latest_bestmove
-
-    def get_alternate_moves(self, fen, excluded, movetime_ms=1200, multipv=3):
-        """Tìm ứng viên thay thế sau khi server từ chối một nước.
-
-        Lượt bình thường vẫn dùng MultiPV=1. Chỉ bật MultiPV tạm thời khi
-        cần fallback, tránh làm giảm độ sâu tìm kiếm của các lượt khác.
-        """
-        if not self.alive() or not fen or ' ' not in fen:
-            return []
-        excluded = {m[:4] for m in excluded}
-        self._latest_bestmove = None
-        self._engine_searching = True
-        with self._lines_lock:
-            self._stdout_lines.clear()
-        try:
-            self._readyok = False
-            with self.engine_lock:
-                self.proc.stdin.write(f"setoption name MultiPV value {multipv}\n")
-                self.proc.stdin.write("isready\n")
-                self.proc.stdin.flush()
-            if not self._wait_for_readyok(timeout=3):
-                return []
-            with self.engine_lock:
-                self.proc.stdin.write("position fen " + fen + "\n")
-                self.proc.stdin.write("go infinite\n")
-                self.proc.stdin.flush()
-            time.sleep(movetime_ms / 1000.0)
-            with self.engine_lock:
-                self.proc.stdin.write("stop\n")
-                self.proc.stdin.flush()
-            deadline = time.time() + 4.0
-            while time.time() < deadline and not self._latest_bestmove:
-                if not self.alive():
-                    break
-                time.sleep(0.02)
-            candidates = []
-            with self._lines_lock:
-                lines = list(self._stdout_lines)
-            for line in lines:
-                if not line.startswith("info") or " pv " not in line:
-                    continue
-                pv = re.search(r"\s+pv\s+(.+)$", line)
-                if not pv:
-                    continue
-                move = pv.group(1).split()[0][:4]
-                if re.match(r"^[a-i]\d[a-i]\d$", move) and move not in excluded:
-                    if move not in candidates:
-                        candidates.append(move)
-            return candidates
-        except Exception as e:
-            print(f"[ENGINE] alternate search error: {e}", flush=True)
-            return []
-        finally:
-            self._engine_searching = False
-            try:
-                with self.engine_lock:
-                    self.proc.stdin.write("setoption name MultiPV value 1\n")
-                    self.proc.stdin.write("isready\n")
-                    self.proc.stdin.flush()
-            except Exception:
-                pass
-
-    # ==================== ★ PONDER ====================
-
-    def _drain_idle(self, timeout=3.0):
-        """Đợi engine nhàn rỗi thật sự: isready → readyok."""
-        self._readyok = False
-        try:
-            with self.engine_lock:
-                self.proc.stdin.write("isready\n")
-                self.proc.stdin.flush()
-        except Exception:
-            return
-        t0 = time.time()
-        while time.time() - t0 < timeout and not self._readyok:
-            if not self.alive():
-                return
-            time.sleep(0.02)
-
-    def ponderhit_consistent(self, real_move):
-        """★ PONDER-SAFE: nước đối thủ THẬT (kèm suffix reveal) có nhất quán với
-        giả định của ponder không?
-
-        Engine ponder trên nước dự đoán KHÔNG có suffix → phỏng đoán loại quân
-        theo ô chuẩn. Nếu nước thật có reveal khác phỏng đoán (vd d0e1C: engine
-        phỏng d0 là Sĩ, thật là Pháo) thì thế engine đang search KHÁC thế thật
-        → bestmove có thể bất hợp pháp ('General threatened') hoặc chất lượng
-        tệ. Khi đó phải bỏ ponderhit, search lại với FEN đúng.
-        """
-        try:
-            fen = self._ponder_fen
-            if not fen or len(real_move) < 4:
-                return False
-            frm = (ord(real_move[0]) - 97, int(real_move[1]))
-            piece = None
-            r = 9
-            for row in fen.split(' ')[0].split('/'):
-                f = 0
-                for ch in row:
-                    if ch.isdigit():
-                        f += int(ch)
-                    else:
-                        if (f, r) == frm:
-                            piece = ch
-                        f += 1
-                r -= 1
-            if piece is None:
-                return False            # ô nguồn trống theo FEN → lệch vị trí
-            if len(real_move) > 4:      # nước thật CÓ reveal
-                rev = real_move[4]
-                if piece in ('X', 'x'):
-                    presumed = PRESUMED_STD.get(frm)
-                    if not presumed:
-                        return False    # ô không chuẩn — không biết engine nghĩ gì
-                    presumed = presumed.upper() if piece == 'X' else presumed.lower()
-                    return presumed == rev   # khớp phỏng đoán → thế engine đúng
-                return piece == rev     # quân đã lộ từ trước → engine biết chính xác
-            # nước thật KHÔNG reveal → chỉ nhất quán khi quân đã lộ (engine biết)
-            return piece not in ('X', 'x')
-        except Exception:
-            return False
-
-    def start_ponder(self, moves, predicted, fen=None):
-        """Search sẵn vị trí SAU nước dự đoán của đối thủ (go ponder infinite)."""
-        if not self.alive() or self._engine_searching:
-            return False
-        self._latest_bestmove = None
-        self._engine_searching = True
-        self._pondering = True
-        self._ponder_pred = predicted[:4]
-        self._ponder_moves = list(moves) + [predicted]
-        self._ponder_fen = fen        # ★ vị trí TRƯỚC nước dự đoán (đối chiếu reveal)
-        with self._lines_lock:
-            self._stdout_lines.clear()
-        try:
-            # ★ FIX ~20-nước: dùng FEN (miễn nhiễm lỗi parser moves)
-            if fen and ' ' in fen:
-                cmd = "position fen " + fen + " moves " + predicted
-            else:
-                cmd = "position startpos moves " + " ".join(self._ponder_moves)
-            with self.engine_lock:
-                self.proc.stdin.write(cmd + "\n")
-                self.proc.stdin.write("go ponder infinite\n")
-                self.proc.stdin.flush()
-        except Exception as e:
-            print(f"[PONDER] start error: {e}")
-            self._pondering = False
-            self._ponder_moves = None
-            self._ponder_pred = None
-            self._ponder_fen = None
-            self._engine_searching = False
-            return False
-        return True
-
-    def stop_ponder(self):
-        """Hủy ponder (đối thủ đi khác dự đoán / hết ván). Đợi xả bestmove."""
-        if not self._pondering:
-            return
-        self._pondering = False
-        try:
-            with self.engine_lock:
-                self.proc.stdin.write("stop\n")
-                self.proc.stdin.flush()
-        except Exception:
-            pass
-        t0 = time.time()
-        while time.time() - t0 < 2.0 and self._latest_bestmove is None:
-            if not self.alive():
-                break
-            time.sleep(0.02)
-        self._latest_bestmove = None
-        # ★ chờ engine NHÀN RỖI thật sự (isready→readyok) trước khi trả quyền —
-        # gửi go mới ngay sau bestmove của ponder gây race: go infinite bị nuốt
-        self._readyok = False
-        try:
-            with self.engine_lock:
-                self.proc.stdin.write("isready\n")
-                self.proc.stdin.flush()
-        except Exception:
-            pass
-        t0 = time.time()
-        while time.time() - t0 < 3.0 and not self._readyok:
-            if not self.alive():
-                break
-            time.sleep(0.02)
-        self._engine_searching = False
-        self._ponder_moves = None
-        self._ponder_pred = None
-        self._ponder_fen = None
-
-    def ponderhit(self, movetime_ms):
-        """Đối thủ đi ĐÚNG dự đoán → chuyển sang search bình thường, trả bestmove."""
-        if not self._pondering:
-            return None
-        self._pondering = False
-        try:
-            with self.engine_lock:
-                self.proc.stdin.write("ponderhit\n")
-                self.proc.stdin.flush()
-        except Exception:
-            self._engine_searching = False
-            return None
-        # engine tiếp tục search từ chỗ đã đi được → cho thêm movetime rồi stop
-        time.sleep(movetime_ms / 1000.0)
-        try:
-            with self.engine_lock:
-                self.proc.stdin.write("stop\n")
-                self.proc.stdin.flush()
-        except Exception:
-            pass
-        t0 = time.time()
-        while time.time() - t0 < 5.0:
-            if self._latest_bestmove:
-                bm = self._latest_bestmove
-                self._latest_bestmove = None
-                # capture pv mới cho lượt ponder kế tiếp
-                with self._lines_lock:
-                    for l in reversed(self._stdout_lines):
-                        if l.startswith("info") and " pv " in l:
-                            pv = re.search(r' pv (.+)$', l)
-                            if pv:
-                                self._last_pv = pv.group(1).split()
-                            break
-                self._engine_searching = False
-                self._ponder_moves = None
-                self._ponder_pred = None
-                self._drain_idle()   # ★ chờ engine nhàn sau bestmove ponderhit
-                return bm
-            if not self.alive():
-                self._engine_searching = False
-                return None
-            time.sleep(0.02)
-        print(f"[PONDER] bestmove timeout sau ponderhit")
-        self._engine_searching = False
-        self._ponder_moves = None
-        self._ponder_pred = None
-        self._ponder_fen = None
-        self._drain_idle()   # chờ engine nhàn trước khi fallback search thường
-        return None
 
 
 
@@ -1225,11 +910,6 @@ class JieqiCupBot:
             self._reconnect_streak += 1
         else:
             self._reconnect_streak = 0
-        # ★ LƯU table_path TRƯỚC KHI RESET — để reconnect vào lại bàn
-        saved_table_path = self._table_path
-        saved_table_path_ts = self._table_path_ts
-        saved_in_game = self.in_game
-        saved_is_playing = self.board.is_playing
         self.connected = False
         self.logged_in = False
         self.in_game = False
@@ -1241,11 +921,6 @@ class JieqiCupBot:
         self._thinking = False
         self._played_this_turn = False
         self.board.reset()
-        # ★ RECONNECT: nếu đang chơi → lưu table_path để reconnect vào lại bàn
-        if saved_is_playing and saved_table_path:
-            self._table_path = saved_table_path
-            self._table_path_ts = saved_table_path_ts
-            print(f"[RECONNECT] Lưu table_path={saved_table_path} để vào lại bàn")
 
     def send_message(self, cmd, data=b''):
         if self.ws and self.connected:
@@ -1282,11 +957,18 @@ class JieqiCupBot:
             return valid
         return [self.bet_amts[0]] if self.bet_amts else []
 
+    def is_family_bot(self, name):
+        if not name or name.strip().lower() == CURRENT_PLAYER_NICKNAME.lower():
+            return False
+        return "." in name
+
     def leave_table(self):
         if self.board.is_playing:
             print("[TABLE] ⚠️ Ingame, cannot leave!")
             return
         print("[TABLE] 🚪 Leaving...")
+        if self._table_path:
+            unregister_bot_table(self._table_path)
         self.in_game = False
         self._joining_table = False
         self._table_path = None
@@ -1458,12 +1140,21 @@ class JieqiCupBot:
         status = msg.read_byte()
         if status == 0:
             table_path = msg.read_ascii()
+            active_tables = get_active_bot_tables()
+            if table_path in active_tables:
+                owner = active_tables[table_path].get("user", "")
+                if owner.lower() != USER.lower():
+                    print(f"[AVOID] 🛑 Bot table {owner}")
+                    self.in_game = False
+                    self._joining_table = False
+                    return
             self.in_game = True
             self._joining_table = True
             self._table_created_by_me = False
             self._sit_alone_since = time.time()
             self._table_path = table_path
             self._table_path_ts = time.time()
+            register_bot_table(table_path, USER)
             print(f"[SEARCH] ✅ Table: {table_path}")
             threading.Thread(target=lambda: (time.sleep(0.5),
                                               self.send_enter_place(path=table_path, mode=1)),
@@ -1488,6 +1179,7 @@ class JieqiCupBot:
             self._sit_alone_since = time.time()
             self._table_path = table_path
             self._table_path_ts = time.time()
+            register_bot_table(table_path, USER)
             print(f"[CREATE] 🎉 {table_path}")
             threading.Thread(target=lambda: (time.sleep(0.5),
                                               self.send_enter_place(path=table_path, mode=1)),
@@ -1504,6 +1196,10 @@ class JieqiCupBot:
             if pid > 0 and pid != CURRENT_PLAYER_ID:
                 self.player_names[pid] = name
                 print(f"[PLAYER] 👤 '{name}' (id={pid})")
+                if not self.board.is_playing and self.is_family_bot(name):
+                    if self.opponent_player_id() == pid:
+                        print(f"[AVOID] Ally bot -> leave")
+                        self.leave_table()
         except Exception:
             pass
 
@@ -1524,6 +1220,10 @@ class JieqiCupBot:
                 if player_id > 0:
                     name = self.player_names.get(player_id, "")
                     print(f"[TABLE] Opponent: pid={player_id}{f', {name}' if name else ''}")
+                    if not self.board.is_playing and self.is_family_bot(name):
+                        print(f"[AVOID] Ally -> leave")
+                        self.leave_table()
+                        return
                     self._sit_alone_since = None
                     if not self.board.is_playing:
                         threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
@@ -1568,7 +1268,6 @@ class JieqiCupBot:
             try:
                 with self.engine.engine_lock:
                     self.engine.proc.stdin.write("ucinewgame\n")
-                    self.engine.proc.stdin.write("setoption name Clear Hash\n")
                     self.engine.proc.stdin.flush()
             except Exception:
                 pass
@@ -1773,10 +1472,7 @@ class JieqiCupBot:
             was_my_turn = self.board.is_my_turn
             self.board.is_my_turn = (slot_id == self.board.my_slot_id)
             self.last_action_timestamp = time.time()
-            if not self.board.is_my_turn:
-                # ★ PONDER: lượt đối thủ → engine nghĩ trước trên nước dự đoán (PV)
-                self._try_start_ponder()
-                return
+            if not self.board.is_my_turn: return
             self._turn_started_at = time.time()
             self._turn_deadline = self._turn_started_at + max(turn_timeout - 5, 10)
             self._played_this_turn = False
@@ -1846,13 +1542,6 @@ class JieqiCupBot:
         self._turn_started_at = 0.0
         self._turn_deadline = 0.0
 
-        # ★ PONDER: hết ván → dừng ponder nếu còn đang chạy
-        if self.engine and hasattr(self.engine, "stop_ponder"):
-            try:
-                self.engine.stop_ponder()
-            except Exception:
-                pass
-
         if self.engine and self.engine.alive():
             try:
                 with self.engine.engine_lock:
@@ -1865,16 +1554,13 @@ class JieqiCupBot:
             is_guest = not getattr(self, '_table_created_by_me', False)
             if bot_lost:
                 if victim and not is_guest:
-                    print(f"[GAME] Lost -> kick opponent (pid={victim})")
                     time.sleep(KICK_DELAY)
                     if self.connected and not self.board.is_playing:
                         self.send_kick_player(victim); time.sleep(2.0)
                 elif is_guest:
                     print("[GAME] Guest -> no kick")
-                # ★ STAY at table after losing (don't leave)
-                # Wait for new opponent to join
-                print("[GAME] Lost -> stay at table, send ready")
-                time.sleep(3.0); self.send_ready(1)
+                print("[GAME] Lost -> leave")
+                time.sleep(1.0); self.leave_table()
             else:
                 print("[GAME] Win/Draw -> stay")
                 time.sleep(3.0); self.send_ready(1)
@@ -1912,43 +1598,19 @@ class JieqiCupBot:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
 
-        fen, moves = self.board.get_current_fen()
+        # Movetime: 2s/move — engine nghĩ nhanh hơn (depth thấp hơn chút)
+        # Cap để còn thời gian fallback nếu bị reject
+        movetime_ms = min(2000, int((remain - 3.0) * 1000))
+        if movetime_ms < 1500:
+            movetime_ms = max(1500, int(remain * 500))
 
-        # Search budget is passed directly to get_best_move(), which performs
-        # `go infinite`, waits this long, then sends `stop`.
-        movetime_ms = min(int(ENGINE_THINK_SECONDS * 1000),
-                          int((remain - 3.0) * 1000))
-        movetime_ms = max(movetime_ms, 1000)  # tối thiểu 1s
-        if remain < 8.0:
-            movetime_ms = max(800, int((remain - 2.0) * 1000))  # sắp hết giờ → nghĩ nhanh
+        fen, moves = self.board.get_current_fen()
 
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
         print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
               flush=True)
 
-        # ★ PONDER: đối thủ đi ĐÚNG nước dự đoán → ponderhit (tận dụng search sẵn)
-        # ★ PONDER-SAFE: chỉ khi reveal của nước thật KHỚP giả định của ponder
-        # (nước dự đoán không suffix → engine phỏng đoán loại theo ô chuẩn; nếu
-        # reveal khác, thế engine đang search khác thế thật → bestmove có thể
-        # bất hợp pháp 'General threatened' — log n17 #8, nước d0e1C)
-        raw = None
-        try:
-            if (self.engine._pondering and self.engine._ponder_moves is not None
-                    and len(moves) >= 2
-                    and moves[:-1] == self.engine._ponder_moves[:-1]
-                    and moves[-1][:4] == self.engine._ponder_pred):
-                if self.engine.ponderhit_consistent(moves[-1]):
-                    print(f"[PONDER] ⚡ Đoán đúng nước đối thủ ({self.engine._ponder_pred}) "
-                          f"— ponderhit!", flush=True)
-                    raw = self.engine.ponderhit(movetime_ms)
-                else:
-                    print(f"[PONDER] ⚠️ Đúng tọa độ nhưng reveal khác phỏng đoán "
-                          f"({moves[-1]}) — bỏ ponderhit, search lại thế thật", flush=True)
-        except Exception as e:
-            print(f"[PONDER] ponderhit lỗi ({e}) — fallback search thường", flush=True)
-            raw = None
-        if not raw:
-            raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
+        raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
 
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
@@ -1965,21 +1627,18 @@ class JieqiCupBot:
               flush=True)
 
         if best_move in self._rejected_moves:
-            print(f"[ENGINE] Rejected move {best_move}, tìm ứng viên thay thế", flush=True)
-            alternatives = self.engine.get_alternate_moves(
-                fen, self._rejected_moves, movetime_ms=min(1500, movetime_ms), multipv=3)
-            if alternatives:
-                best_move = alternatives[0]
-                print(f"[ENGINE] Alternate candidate: {best_move}", flush=True)
-            else:
-                print("[ENGINE] Không có ứng viên thay thế — bỏ lượt", flush=True)
-                return
+            # PikaJieQi doesn't support forbidden command — just skip and let server timeout
+            print(f"[ENGINE] Rejected move {best_move}, skip", flush=True)
+            return
         if best_move in ("(none)", "0000"):
             self.board.is_my_turn = False
             return
 
         try:
             source_pos, target_pos = self.board.engine_move_to_pos(best_move)
+            _turn_start = self._turn_started_at if self._turn_started_at > 0 else time.time()
+            _remain_min = MIN_MOVE_SECONDS - (time.time() - _turn_start)
+            if _remain_min > 0: time.sleep(_remain_min)
             if not (self.board.is_my_turn and self.board.is_playing): return
             if self._played_this_turn: return
 
@@ -1990,33 +1649,6 @@ class JieqiCupBot:
         except Exception as e:
             print(f"[BOT ERROR] {e}")
             traceback.print_exc()
-
-    def _try_start_ponder(self):
-        """★ PONDER: trong lúc đối thủ suy nghĩ, engine search sẵn vị trí
-        sau nước dự đoán (lấy từ PV của lượt search trước)."""
-        try:
-            eng = self.engine
-            if not eng or not hasattr(eng, "start_ponder"):
-                return
-            if not eng.alive() or eng._pondering or eng._engine_searching:
-                return
-            if not self.board.is_playing or self.board.is_my_turn:
-                return
-            pv = list(getattr(eng, "_last_pv", []))
-            if len(pv) < 2:
-                return
-            mine, predicted = pv[0], pv[1]
-            fen, moves = self.board.get_current_fen()
-            # chỉ ponder khi nước cuối trên bàn chính là nước ta vừa đi (khớp PV)
-            if not moves or moves[-1][:4] != mine[:4]:
-                return
-            if not re.match(r"^[a-i]\d[a-i]\d", predicted[:4]):
-                return
-            if eng.start_ponder(list(moves), predicted, fen=fen):
-                print(f"[PONDER] 🧠 Nghĩ trước trong lúc đối thủ nghĩ (đoán: {predicted})",
-                      flush=True)
-        except Exception:
-            pass
 
     def _decode_piece_id(self, encoded_id):
         color = 'r'
@@ -2051,20 +1683,12 @@ class JieqiCupBot:
                         time.sleep(2)
 
                 if not self.connected:
-                    # ★ RECONNECT THÔNG MINH: nhanh hơn khi đang in-game
-                    if self._table_path and time.time() - self._table_path_ts < 300:
-                        # Đang có bàn → reconnect nhanh (1-2s)
-                        delay = RECONNECT_INGAME_DELAY if self._reconnect_streak < RECONNECT_FAST_MAX else min(10, 2 * self._reconnect_streak)
-                        print(f"[RECONNECT] In-game disconnect → chờ {delay}s rồi vào lại bàn {self._table_path}")
+                    if self._reconnect_streak >= 3:
+                        print(f"[BOT] ⚠️ Tài khoản {USER} có thể đăng nhập chỗ khác")
+                    if self._reconnect_streak > 0:
+                        delay = min(60, 5 * (2 ** min(self._reconnect_streak - 1, 4)))
+                        print(f"[WS] Rớt liên tiếp {self._reconnect_streak} -> chờ {delay}s")
                         time.sleep(delay)
-                    else:
-                        # Không có bàn → reconnect thường
-                        if self._reconnect_streak >= 3:
-                            print(f"[BOT] ⚠️ Tài khoản {USER} có thể đăng nhập chỗ khác")
-                        if self._reconnect_streak > 0:
-                            delay = min(30, 3 * (2 ** min(self._reconnect_streak - 1, 3)))
-                            print(f"[WS] Rớt liên tiếp {self._reconnect_streak} -> chờ {delay}s")
-                            time.sleep(delay)
                     if not fetch_session_info():
                         time.sleep(5); continue
                     self.logged_in = False; self.in_game = False
