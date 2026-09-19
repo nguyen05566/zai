@@ -245,6 +245,9 @@ def is_block_software_message(raw_bytes):
 def fetch_session_info():
     global COOKIE, TOKEN, CURRENT_PLAYER_NICKNAME, CURRENT_PLAYER_ID, PLACE_PATH, _IDENTITY_SYNCED
     try:
+        if not USER or not PASSWD:
+            print("[SESSION] ❌ Thiếu CARO_USER17/CARO_PASSWD17; không thử đăng nhập khách")
+            return False
         session = requests.Session()
         session.headers.update({
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -823,7 +826,7 @@ class JieqiEngine:
         # ZaiQi's "startpos" = mystery xiangqi initial position (same as cup_bot).
         # This avoids ALL FEN/BAG/case/side convention issues.
         # Ưu tiên FEN đầy đủ (đường chính), startpos+moves chỉ là dự phòng.
-        # Moves WITH reveal suffix (e.g. "c3c4R") are supported by ForgeQi.
+        # Moves WITH reveal suffix (e.g. "c3c4R") are supported by ZaiQi.
         try:
             # ★ FIX ~20-nước: ưu tiên FEN đầy đủ — chính xác tuyệt đối, miễn nhiễm
             # lỗi parser moves của engine (nước lật, quân úp sai hình học phỏng đoán)

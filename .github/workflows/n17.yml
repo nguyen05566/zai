@@ -28,8 +28,8 @@ jobs:
     - name: Install Python dependency
       run: pip install websocket-client
 
-    # ★ Engine: ForgeQi (độc lập, classical eval, không cần NNUE).
-    - name: Build ForgeQi engine
+    # ★ Engine: ZaiQi (độc lập, classical eval, không cần NNUE).
+    - name: Build ZaiQi engine
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq build-essential
@@ -37,8 +37,8 @@ jobs:
 
     - name: Verify engine
       run: |
-        echo "uci" | ./forgeqi | head -3
-        { echo uci; echo isready; echo "position startpos"; echo "go infinite"; sleep 2; echo stop; sleep 1; echo quit; } | timeout 20 ./forgeqi | tee /tmp/v.log
+        echo "uci" | ./zaiqi | head -3
+        { echo uci; echo isready; echo "position startpos"; echo "go infinite"; sleep 2; echo stop; sleep 1; echo quit; } | timeout 20 ./zaiqi | tee /tmp/v.log
         grep -q uciok /tmp/v.log
         grep -q readyok /tmp/v.log
         grep -Eq '^bestmove [a-i][0-9][a-i][0-9]' /tmp/v.log
