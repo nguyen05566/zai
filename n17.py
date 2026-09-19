@@ -150,6 +150,7 @@ VN_TEN_KHONG_DAU = [
 ]
 
 _IDENTITY_SYNCED = False
+SYNC_PROFILE_ON_LOGIN = False  # Không đổi hồ sơ mỗi lần reconnect; tránh làm mất phiên.
 
 
 def generate_dotted_full_name():
@@ -259,12 +260,15 @@ def fetch_session_info():
                      "Referer": LOGIN_URL,
                      "Content-Type": "application/x-www-form-urlencoded"},
             allow_redirects=True)
-        if not _IDENTITY_SYNCED:
+        if SYNC_PROFILE_ON_LOGIN and not _IDENTITY_SYNCED:
             _IDENTITY_SYNCED = True
             sync_profile_name(session)
             sync_random_avatar(session)
         game_resp = session.get(GAME_URL, timeout=20)
         page_html = game_resp.text
+        if re.search(r'(?i)<title>\s*(?:login|đăng nhập)', page_html):
+            print("[SESSION] ❌ HTTP session vẫn ở trang đăng nhập")
+            return False
         tm = re.search(r"var\s+token\s*=\s*(-?\d+)", page_html)
         if not tm: return False
         TOKEN = int(tm.group(1))
@@ -273,6 +277,12 @@ def fetch_session_info():
         CURRENT_PLAYER_NICKNAME = nm.group(1).strip()
         pid = re.search(r"var\s+currentPlayerId\s*=\s*(\d+)", page_html)
         if pid: CURRENT_PLAYER_ID = int(pid.group(1))
+        # Guest pages also expose a token and generated nickname (g#########),
+        # but their WebSocket commands are rejected as "unsigned in".
+        if CURRENT_PLAYER_ID <= 0 or re.fullmatch(r"g\d+", CURRENT_PLAYER_NICKNAME, re.I):
+            print("[SESSION] ❌ Đăng nhập thất bại: server trả phiên khách "
+                  f"(id={CURRENT_PLAYER_ID}, nick={CURRENT_PLAYER_NICKNAME})")
+            return False
         pm = re.search(r"var\s+placePath\s*=\s*[\"']([^\"']+)[\"']", page_html)
         if pm: PLACE_PATH = pm.group(1)
         try:
@@ -1188,7 +1198,11 @@ class JieqiCupBot:
             WS_URL, cookie=COOKIE,
             on_open=self._on_open, on_message=self._on_message,
             on_error=self._on_error, on_close=self._on_close,
-            header={"Origin": "https://gamevh.net"})
+            header=[
+                "Origin: https://gamevh.net",
+                "Referer: https://gamevh.net/play/mystery_xiangqi/0",
+                "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139.0 Safari/537.36",
+            ])
         self.ws_thread = threading.Thread(
             target=lambda: self.ws.run_forever(ping_interval=30, ping_timeout=None),
             daemon=True)
