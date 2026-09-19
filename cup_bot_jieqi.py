@@ -2,7 +2,7 @@
 cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (cppjieqi) thay cho PKJQ.exe
 
 Khác biệt vs cup_bot.py:
-  - Engine: ZaiQi (C++ native, engine cờ úp độc lập, không cần NNUE)
+  - Engine: pikajieqi-native (C++ native, không cần wine)
   - Movetime: 5000ms (5s/nước)
   - Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork-and-think)
   - BAG updates: gửi kèm moves list để Jieqi sync state
@@ -113,10 +113,9 @@ GAME_ID = 'mystery_xiangqi'
 PLACE_PATH = 'Lobby.mystery_xiangqi.0'
 
 # === ENGINE CONFIG ===
-# ZaiQi — engine cờ úp độc lập viết riêng cho repo này
-ZAIQI_BINARY_CANDIDATES = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "zaiqi"),
-    "./zaiqi",
+# pikajieqi-native (cppjieqi wrapper) — C++ native, no wine needed
+PIKAJIEQI_BINARY_CANDIDATES = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
 ]
 
 # Engine search budget. This is consumed by get_best_move(), not a delay before
@@ -150,7 +149,6 @@ VN_TEN_KHONG_DAU = [
 ]
 
 _IDENTITY_SYNCED = False
-SYNC_PROFILE_ON_LOGIN = False  # Không đổi hồ sơ mỗi lần reconnect; tránh làm mất phiên.
 
 
 def generate_dotted_full_name():
@@ -245,9 +243,6 @@ def is_block_software_message(raw_bytes):
 def fetch_session_info():
     global COOKIE, TOKEN, CURRENT_PLAYER_NICKNAME, CURRENT_PLAYER_ID, PLACE_PATH, _IDENTITY_SYNCED
     try:
-        if not USER or not PASSWD:
-            print("[SESSION] ❌ Thiếu CARO_USER19/CARO_PASSWD19; không thử đăng nhập khách")
-            return False
         session = requests.Session()
         session.headers.update({
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -263,15 +258,12 @@ def fetch_session_info():
                      "Referer": LOGIN_URL,
                      "Content-Type": "application/x-www-form-urlencoded"},
             allow_redirects=True)
-        if SYNC_PROFILE_ON_LOGIN and not _IDENTITY_SYNCED:
+        if not _IDENTITY_SYNCED:
             _IDENTITY_SYNCED = True
             sync_profile_name(session)
             sync_random_avatar(session)
         game_resp = session.get(GAME_URL, timeout=20)
         page_html = game_resp.text
-        if re.search(r'(?i)<title>\s*(?:login|đăng nhập)', page_html):
-            print("[SESSION] ❌ HTTP session vẫn ở trang đăng nhập")
-            return False
         tm = re.search(r"var\s+token\s*=\s*(-?\d+)", page_html)
         if not tm: return False
         TOKEN = int(tm.group(1))
@@ -280,12 +272,6 @@ def fetch_session_info():
         CURRENT_PLAYER_NICKNAME = nm.group(1).strip()
         pid = re.search(r"var\s+currentPlayerId\s*=\s*(\d+)", page_html)
         if pid: CURRENT_PLAYER_ID = int(pid.group(1))
-        # Guest pages also expose a token and generated nickname (g#########),
-        # but their WebSocket commands are rejected as "unsigned in".
-        if CURRENT_PLAYER_ID <= 0 or re.fullmatch(r"g\d+", CURRENT_PLAYER_NICKNAME, re.I):
-            print("[SESSION] ❌ Đăng nhập thất bại: server trả phiên khách "
-                  f"(id={CURRENT_PLAYER_ID}, nick={CURRENT_PLAYER_NICKNAME})")
-            return False
         pm = re.search(r"var\s+placePath\s*=\s*[\"']([^\"']+)[\"']", page_html)
         if pm: PLACE_PATH = pm.group(1)
         try:
@@ -614,9 +600,9 @@ class XiangqiBoardTracker:
 
 
 class JieqiEngine:
-    """Wrapper quanh ZaiQi binary (engine cờ úp độc lập).
+    """Wrapper quanh PikaJieQi Linux native binary.
     
-    ZaiQi hiểu quân úp (X/x), reveal suffix, túi quân (BAG) qua FEN
+    PikaJieQi là fork của Pikafish với jieqi branch — hỗ trợ mystery_xiangqi
     FEN format (X/x cho quân úp + BAG) NATIVELY.
     
     Không cần fork-and-think như cppjieqi wrapper — engine ổn định, không crash,
@@ -641,21 +627,21 @@ class JieqiEngine:
         self._lines_lock = threading.Lock()
 
         # Find binary
-        for path in ZAIQI_BINARY_CANDIDATES:
+        for path in PIKAJIEQI_BINARY_CANDIDATES:
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 self.binary_path = path
                 break
         if not self.binary_path:
-            print(f"[ENGINE] ❌ Không tìm thấy zaiqi binary. Đã thử: {ZAIQI_BINARY_CANDIDATES}")
+            print(f"[ENGINE] ❌ Không tìm thấy pikajieqi-native binary. Đã thử: {PIKAJIEQI_BINARY_CANDIDATES}")
             self.engine = False
             return
 
-        print(f"[ENGINE] 🎯 zaiqi = {self.binary_path}")
+        print(f"[ENGINE] 🎯 pikajieqi-native = {self.binary_path}")
         self._init_engine()
         self.engine = self.proc is not None
 
     def _init_engine(self):
-        """Start zaiqi as subprocess."""
+        """Start pikajieqi-native as subprocess."""
         self._pondering = False       # ★ PONDER: process mới → hết trạng thái ponder
         self._ponder_moves = None
         self._ponder_pred = None
@@ -737,12 +723,25 @@ class JieqiEngine:
             self._kill()
             return
 
-        # ZaiQi dùng classical evaluation tích hợp sẵn — không cần NNUE.
+        # Dùng NNUE đóng gói sẵn trong repo để workflow không phải tải mạng
+        # riêng ở mỗi lần chạy.
+        # Dùng đúng NNUE đóng gói sẵn trong repo; không tải từ mạng.
+        nnue_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "zai_jieqi_master.nnue"
+        )
+        if not os.path.isfile(nnue_path):
+            print(f"[ENGINE] ❌ Thiếu NNUE trong repo: {nnue_path}")
+            self._kill()
+            return
         with self.engine_lock:
             try:
                 _threads = max(1, min(4, (os.cpu_count() or 2)))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
-                self.proc.stdin.write("setoption name Hash value 256\n")
+                # 1 GiB transposition table for deeper reuse in hidden-piece searches.
+                self.proc.stdin.write("setoption name Hash value 1024\n")
+                self.proc.stdin.write("setoption name Ponder value true\n")
+                self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
+                self.proc.stdin.write("setoption name MultiPV value 1\n")
                 self.proc.stdin.write("isready\n")
                 self.proc.stdin.flush()
             except Exception as e:
@@ -754,7 +753,8 @@ class JieqiEngine:
             self._kill()
             return
 
-        print(f"[ENGINE] ✅ zaiqi ready | Threads={_threads} Hash=256")
+        print(f"[ENGINE] ✅ pikajieqi-native ready | Threads={_threads} Hash=1024 "
+              f"Ponder=true MultiPV=1 EvalFile={nnue_path}")
 
     def _wait_for_line(self, prefix, timeout=10):
         t0 = time.time()
@@ -796,18 +796,14 @@ class JieqiEngine:
         self._init_engine()
         return self.alive()
 
-    def get_best_move(self, fen, moves, movetime_ms=int(ENGINE_THINK_SECONDS * 1000),
-                      banned=()):
+    def get_best_move(self, fen, moves, movetime_ms=int(ENGINE_THINK_SECONDS * 1000)):
         """Send position + go infinite, wait movetime, then stop.
         
-        ZaiQi engine:
+        PikaJieQi native engine:
         - Does NOT support 'go movetime' (bug in jieqi branch).
         - Must use 'go infinite' + 'stop' pattern.
-        - FEN CÓ trường BAG (A2B2...) — ZaiQi parse trực tiếp.
+        - FEN must NOT include BAG — PikaJieQi auto-generates it from board.
         - Moves WITH reveal suffix (e.g. "c3c4R") are supported.
-        - banned: các nước bị server reject — gửi 'banmoves' để engine chọn
-          nước KHÁC ngay từ đầu (hỗ trợ bởi ZaiQi; engine
-          không hỗ trợ sẽ bỏ qua lệnh lạ một cách an toàn).
         """
         if not self.alive():
             if not self.restart():
@@ -823,10 +819,10 @@ class JieqiEngine:
             self._stdout_lines.clear()
 
         # ★ Use "position startpos moves ..." instead of "position fen ..."
-        # ZaiQi's "startpos" = mystery xiangqi initial position (same as cup_bot).
+        # PikaJieQi's "startpos" = mystery xiangqi initial position (same as cup_bot).
         # This avoids ALL FEN/BAG/case/side convention issues.
-        # Ưu tiên FEN đầy đủ (đường chính), startpos+moves chỉ là dự phòng.
-        # Moves WITH reveal suffix (e.g. "c3c4R") are supported by ZaiQi.
+        # PikaJieQi auto-generates BAG from board and tracks reveals.
+        # Moves WITH reveal suffix (e.g. "c3c4R") are supported by PikaJieQi.
         try:
             # ★ FIX ~20-nước: ưu tiên FEN đầy đủ — chính xác tuyệt đối, miễn nhiễm
             # lỗi parser moves của engine (nước lật, quân úp sai hình học phỏng đoán)
@@ -839,13 +835,7 @@ class JieqiEngine:
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
-                # ★ REJECT-RECOVERY: cấm các nước bị server reject (ZaiQi
-                # đều hỗ trợ; engine khác bỏ qua an toàn)
-                if banned:
-                    ban_cmd = "banmoves " + " ".join(m[:4] for m in banned)
-                    self.proc.stdin.write(ban_cmd + "\n")
-                    self.proc.stdin.flush()
-                # ★ Dùng 'go infinite' + 'stop' (thống nhất cho mọi engine)
+                # ★ 'go movetime' doesn't work in PikaJieQi jieqi branch
                 # Use 'go infinite' + 'stop' after movetime
                 self.proc.stdin.write("go infinite\n")
                 self.proc.stdin.flush()
@@ -1201,11 +1191,7 @@ class JieqiCupBot:
             WS_URL, cookie=COOKIE,
             on_open=self._on_open, on_message=self._on_message,
             on_error=self._on_error, on_close=self._on_close,
-            header=[
-                "Origin: https://gamevh.net",
-                "Referer: https://gamevh.net/play/mystery_xiangqi/0",
-                "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139.0 Safari/537.36",
-            ])
+            header={"Origin": "https://gamevh.net"})
         self.ws_thread = threading.Thread(
             target=lambda: self.ws.run_forever(ping_interval=30, ping_timeout=None),
             daemon=True)
@@ -1641,7 +1627,15 @@ class JieqiCupBot:
                   f"my_slot={my_slot_id} | first={first_turn_slot_id} | "
                   f"flip={self.board.flip}")
             
-            # (ZaiQi không cần setflip — bot tự dựng FEN đúng hướng)
+            # ★ Tell engine about flip state
+            if self.engine and self.engine.alive():
+                try:
+                    with self.engine.engine_lock:
+                        flip_str = "true" if self.board.flip else "false"
+                        self.engine.proc.stdin.write(f"setflip {flip_str}\n")
+                        self.engine.proc.stdin.flush()
+                except Exception:
+                    pass
         except Exception as e:
             print(f"[START_MATCH ERROR] {e}")
             traceback.print_exc()
@@ -1954,14 +1948,12 @@ class JieqiCupBot:
             print(f"[PONDER] ponderhit lỗi ({e}) — fallback search thường", flush=True)
             raw = None
         if not raw:
-            raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms,
-                                            banned=self._rejected_moves)
+            raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
 
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
-                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms,
-                                                banned=self._rejected_moves)
+                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
             if not raw:
                 print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True)
                 return
