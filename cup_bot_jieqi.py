@@ -89,8 +89,10 @@ class _UrllibSession:
 requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
-CARO_USER_DIRECT = "nguyen1"
-CARO_PASSWD_DIRECT = "n123456"
+# Không lưu thông tin đăng nhập trong source công khai. GitHub Actions truyền
+# CARO_USER19/CARO_PASSWD19 từ repository secrets.
+CARO_USER_DIRECT = ""
+CARO_PASSWD_DIRECT = ""
 
 
 def _clean_env(val, default):
@@ -723,13 +725,15 @@ class JieqiEngine:
             self._kill()
             return
 
-        # Configure engine for strength while keeping runner resource use safe.
-        # Ponder must be enabled because the bot uses `go ponder infinite`.
-        # Ưu tiên NNUE model tùy biến đã được huấn luyện riêng cho Cờ Úp (zai_jieqi_master.nnue),
-        # nếu không tìm thấy fallback về pikafish.nnue tiêu chuẩn.
-        custom_nnue = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zai_jieqi_master.nnue")
-        default_nnue = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikafish.nnue")
-        nnue_path = custom_nnue if os.path.isfile(custom_nnue) else default_nnue
+        # Dùng NNUE đóng gói sẵn trong repo để workflow không phải tải mạng
+        # riêng ở mỗi lần chạy.
+        nnue_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "zai_jieqi_master.nnue"
+        )
+        if not os.path.isfile(nnue_path):
+            print(f"[ENGINE] ❌ Không tìm thấy NNUE trong repo: {nnue_path}")
+            self._kill()
+            return
         with self.engine_lock:
             try:
                 _threads = max(1, min(4, (os.cpu_count() or 2)))
