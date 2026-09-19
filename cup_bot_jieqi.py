@@ -727,11 +727,16 @@ class JieqiEngine:
 
         # Dùng NNUE đóng gói sẵn trong repo để workflow không phải tải mạng
         # riêng ở mỗi lần chạy.
-        nnue_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "zai_jieqi_master.nnue"
-        )
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        # Ưu tiên net train mới nhất, rồi alias master, rồi pikafish.nnue
+        _nnue_candidates = [
+            os.path.join(base_dir, "zai_cup_boost_v1.nnue"),
+            os.path.join(base_dir, "zai_jieqi_master.nnue"),
+            os.path.join(base_dir, "pikafish.nnue"),
+        ]
+        nnue_path = next((p for p in _nnue_candidates if os.path.isfile(p)), _nnue_candidates[0])
         if not os.path.isfile(nnue_path):
-            print(f"[ENGINE] ❌ Không tìm thấy NNUE trong repo: {nnue_path}")
+            print(f"[ENGINE] ❌ Không tìm thấy NNUE (thử zai_cup_boost_v1 / zai_jieqi_master / pikafish): {nnue_path}")
             self._kill()
             return
         with self.engine_lock:

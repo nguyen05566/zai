@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python3
 """test_pikajieqi_native.py — Test PikaJieQi Linux native engine.
 
@@ -12,7 +13,7 @@ Test:
 import subprocess, time, threading, re, os
 
 PIKAJIEQI = "/home/z/my-project/bin/pikajieqi-native"
-NNUE = "/home/z/my-project/bin/pikafish.nnue"
+NNUE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zai_cup_boost_v1.nnue")
 
 BOARD = "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX"
 BAG = "A2B2N2R2C2P5a2b2n2r2c2p5"

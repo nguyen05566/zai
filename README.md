@@ -8,7 +8,7 @@ Bot cờ úp (mystery_xiangqi) cho gamevh.net, dùng engine native được buil
 - Branch: [`jieqi_old`](https://github.com/official-pikafish/Pikafish/tree/jieqi_old)
 - Pinned commit: `23b9466c981f0f3a1133f92de1a6f86406c4eccc`
 - Reason for `jieqi_old`: the existing mystery-xiangqi bot protocol and king-guard patch are compatible with this official branch. The newer `jieqi` branch does not accept the patch without a separate port.
-- NNUE: `pikafish.nnue` from the official [Pikafish Networks](https://github.com/official-pikafish/Networks) release.
+- NNUE: trained `zai_cup_boost_v1.nnue` (HalfKAv2_hm, jieqi_old-compatible). `build_engine.sh` enables `USE_NNUEEVAL` and installs it as `pikafish.nnue`.
 
 The previous build used the unofficial `brianhliou/pikafish-jieqi-wasm` fork and `jieqi_old-mistboard`; that dependency has been removed.
 
@@ -39,11 +39,27 @@ The engine uses `position startpos moves ...` with reveal suffixes such as `c3c4
 
 The engine remains covered by the upstream GPLv3 license. Bot-specific files retain their original project licensing and configuration responsibilities.
 
-## Trained Cờ Úp NNUE (`zai_jieqi_master.nnue`)
-Repo đã tích hợp mạng nơ-ron đánh giá vị trí chuyên biệt cho Cờ Úp (**zai_jieqi_master.nnue**):
-- **Kiến trúc mạng**: HalfKAv2_hm với 8 layer stacks (psqt + accumulator) phù hợp với engine `pikafish jieqi_old`.
-- **Tối ưu hóa lối chơi**:
-  - Tăng cường định giá chủ động ăn quân và mở quân úp các lộ trọng điểm (Xe lộ 3, 7, Pháo lồng).
-  - Tối ưu hóa điều động Sĩ, Tượng qua sông (luật cờ úp cho phép Sĩ/Tượng sang sông tham chiến linh hoạt).
-  - Khắc phục lỗi bóng ma chiếu (phantom-check) và giữ an toàn tướng khi đối phương chưa lộ quân.
-- **Tự động kích hoạt**: `cup_bot_jieqi.py` và `n17.py` sẽ tự động ưu tiên nạp file `zai_jieqi_master.nnue` nếu có sẵn trong thư mục bot, nếu không sẽ dùng `pikafish.nnue` mặc định.
+## Trained Cờ Úp NNUE (`zai_cup_boost_v1.nnue`)
+
+Repo ships a custom evaluation net for mystery xiangqi:
+
+| File | Role |
+|------|------|
+| `zai_cup_boost_v1.nnue` | **Primary** trained net (HalfKAv2_hm 1536×2-15-32, hash `0x6E24D6CA`) |
+| `zai_jieqi_master.nnue` | Alias of the same net (backward compatible) |
+| `pikafish.nnue` | Created by `build_engine.sh` as a copy of the trained net |
+
+### Training summary (`zai_cup_boost_v1`)
+- Self-play positions labeled by classical PikaJieQi (`jieqi_old`)
+- 160 positions · depth 3 · 10 epochs (CPU trainer)
+- Loss 0.680 → **0.604**, MAE 325 → **224 cp**
+- Engine load verified: `info string NNUE evaluation using zai_cup_boost_v1.nnue enabled`
+
+### Auto-load order
+`cup_bot_jieqi.py` and `n17.py` try, in order:
+1. `zai_cup_boost_v1.nnue`
+2. `zai_jieqi_master.nnue`
+3. `pikafish.nnue`
+
+### Engine note
+`jieqi_old` defaults to `USE_NNUEEVAL 0`. `build_engine.sh` flips it to `1` so the trained net is actually used in search.
