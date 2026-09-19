@@ -38,3 +38,12 @@ The engine uses `position startpos moves ...` with reveal suffixes such as `c3c4
 ## License
 
 The engine remains covered by the upstream GPLv3 license. Bot-specific files retain their original project licensing and configuration responsibilities.
+
+## Trained Cờ Úp NNUE (`zai_jieqi_master.nnue`)
+Repo đã tích hợp mạng nơ-ron đánh giá vị trí chuyên biệt cho Cờ Úp (**zai_jieqi_master.nnue**):
+- **Kiến trúc mạng**: HalfKAv2_hm với 8 layer stacks (psqt + accumulator) phù hợp với engine `pikafish jieqi_old`.
+- **Tối ưu hóa lối chơi**:
+  - Tăng cường định giá chủ động ăn quân và mở quân úp các lộ trọng điểm (Xe lộ 3, 7, Pháo lồng).
+  - Tối ưu hóa điều động Sĩ, Tượng qua sông (luật cờ úp cho phép Sĩ/Tượng sang sông tham chiến linh hoạt).
+  - Khắc phục lỗi bóng ma chiếu (phantom-check) và giữ an toàn tướng khi đối phương chưa lộ quân.
+- **Tự động kích hoạt**: `cup_bot_jieqi.py` và `n17.py` sẽ tự động ưu tiên nạp file `zai_jieqi_master.nnue` nếu có sẵn trong thư mục bot, nếu không sẽ dùng `pikafish.nnue` mặc định.

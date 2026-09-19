@@ -725,7 +725,11 @@ class JieqiEngine:
 
         # Configure engine for strength while keeping runner resource use safe.
         # Ponder must be enabled because the bot uses `go ponder infinite`.
-        nnue_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikafish.nnue")
+        # Ưu tiên NNUE model tùy biến đã được huấn luyện riêng cho Cờ Úp (zai_jieqi_master.nnue),
+        # nếu không tìm thấy fallback về pikafish.nnue tiêu chuẩn.
+        custom_nnue = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zai_jieqi_master.nnue")
+        default_nnue = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikafish.nnue")
+        nnue_path = custom_nnue if os.path.isfile(custom_nnue) else default_nnue
         with self.engine_lock:
             try:
                 _threads = max(1, min(4, (os.cpu_count() or 2)))

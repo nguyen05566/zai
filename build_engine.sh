@@ -24,4 +24,8 @@ curl --fail --silent --show-error -L \
   -o "$SCRIPT_DIR/pikafish.nnue"
 
 echo "Official Pikafish jieqi_old engine built successfully"
-ls -la "$SCRIPT_DIR/pikajieqi-native" "$SCRIPT_DIR/pikafish.nnue"
+ls -la "$SCRIPT_DIR/pikajieqi-native"
+if [ -f "$SCRIPT_DIR/zai_jieqi_master.nnue" ]; then
+  echo "Trained Cờ Úp NNUE found: $SCRIPT_DIR/zai_jieqi_master.nnue"
+fi
+ls -la "$SCRIPT_DIR/pikafish.nnue"
