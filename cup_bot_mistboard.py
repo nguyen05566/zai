@@ -596,6 +596,7 @@ class MistboardJieqiEngine:
         self._last_score = "?"
         self._restart_count = 0
         self._stdout_lines = []
+        self._last_candidates = []
         self._lines_lock = threading.Lock()
         for path in PIKAJIEQI_BINARY_CANDIDATES:
             if os.path.isfile(path) and os.access(path, os.X_OK):
@@ -687,7 +688,7 @@ class MistboardJieqiEngine:
                 # an NNUE file. Use it only when the optional net is present.
                 if os.path.isfile(nnue_path):
                     self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
-                self.proc.stdin.write("setoption name MultiPV value 1\n")
+                self.proc.stdin.write("setoption name MultiPV value 5\n")
                 self.proc.stdin.write("isready\n")
                 self.proc.stdin.flush()
             except Exception as e:
@@ -742,6 +743,7 @@ class MistboardJieqiEngine:
             if not self.restart():
                 return None
         self._latest_bestmove = None
+        self._last_candidates = []
         self._engine_searching = True
         with self._lines_lock:
             self._stdout_lines.clear()
@@ -785,6 +787,12 @@ class MistboardJieqiEngine:
                                     self._last_score = f"M{sm.group(2)}"
                                 else:
                                     self._last_score = f"{int(sm.group(2))/100:+.2f}"
+                            # Keep the first PV move for each MultiPV line.
+                            for line in self._stdout_lines:
+                                if line.startswith("info") and " multipv " in line and " pv " in line:
+                                    pv = line.split(" pv ", 1)[1].split()
+                                    if pv and pv[0] not in self._last_candidates:
+                                        self._last_candidates.append(pv[0])
                             break
                 return self._latest_bestmove
             if not self.alive():
@@ -1585,6 +1593,21 @@ class JieqiCupBot:
         print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
               flush=True)
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
+        # Simple reveal policy: among the engine's MultiPV candidates, prefer
+        # a move originating from a hidden rook/cannon/horse at random.
+        if self.engine._last_candidates:
+            reveal_candidates = []
+            for candidate in self.engine._last_candidates:
+                try:
+                    src, _ = self.board.engine_move_to_pos(candidate)
+                    face = self.visible_board.cells[src] if 0 <= src < 90 else '.'
+                    if src in self.board.dark_positions and face.lower() in {'r', 'c', 'n'}:
+                        reveal_candidates.append(candidate)
+                except Exception:
+                    pass
+            if reveal_candidates:
+                raw = random.choice(reveal_candidates)
+                print(f"[REVEAL-POLICY] candidates={reveal_candidates} selected={raw}", flush=True)
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
