@@ -119,7 +119,7 @@ KICK_MODE = "never"
 KICK_DELAY = 5.0
 SIT_ALONE_TIMEOUT = 300.0
 
-BOT_BET_XU = 20000
+BOT_BET_XU = 1000
 BOT_USE_CREATE_TABLE = True
 BOT_MATCH_DURATION = '5'
 BOT_TURN_DURATION = '30'
@@ -683,7 +683,6 @@ class JieqiEngine:
                 self.proc.stdin.write("setoption name Hash value 128\n")
                 self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
-                self.proc.stdin.write("setoption name Ponder value false\n")
                 self.proc.stdin.write("isready\n")
                 self.proc.stdin.flush()
             except Exception as e:
@@ -742,8 +741,13 @@ class JieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # Use the FEN passed by caller (from VisibleBoard)
-            cmd = f"position fen {fen}"
+            # ★ Use "position startpos moves ..." — PikaJieQi's native format
+            # PikaJieQi auto-tracks BAG and dark piece reveals from move suffixes
+            # BAG updates correctly: c3c4N → N2→N1 in BAG
+            # Engine uses BAG for expected value calculation in flip_search
+            cmd = "position startpos"
+            if moves:
+                cmd += " moves " + " ".join(moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -1556,7 +1560,7 @@ class JieqiCupBot:
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
-                raw = self.engine.get_best_move(fen, [], movetime_ms=movetime_ms)
+                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
             if not raw:
                 print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True)
                 return
@@ -1565,7 +1569,6 @@ class JieqiCupBot:
         best_move = parts[1]
         print(f"[ENGINE-OUT] bestmove: {best_move} [d{self.engine._last_depth} {self.engine._last_score}]",
               flush=True)
-        best_move = self._prioritize_reveal(best_move)
         if best_move in self._rejected_moves:
             print(f"[ENGINE] Rejected move {best_move}, skip", flush=True)
             return
@@ -1583,45 +1586,9 @@ class JieqiCupBot:
                   f"| uci={len(self.board.uci_moves)}", flush=True)
             self._last_sent_move = best_move
             self.send_play(source_pos, target_pos)
-            # ★ Update visible board for our own move
-            self.visible_board.apply_move(source_pos, target_pos)
-            self.visible_board.flip_side()
         except Exception as e:
             print(f"[BOT ERROR] {e}")
             traceback.print_exc()
-
-    def _prioritize_reveal(self, engine_best_move):
-        """Prioritize revealing strong dark pieces (Rook/Cannon/Knight) in early game."""
-        if len(self.board.uci_moves) > 10:
-            return engine_best_move
-        try:
-            src_pos, tgt_pos = self.board.engine_move_to_pos(engine_best_move)
-        except:
-            return engine_best_move
-        is_dark_move = src_pos in self.board.dark_positions
-        if is_dark_move:
-            piece = self.visible_board.cells[src_pos] if 0 <= src_pos < 90 else '.'
-            if piece in ('R', 'C', 'N', 'r', 'c', 'n'):
-                return engine_best_move
-        my_color = 'r' if self.board.is_red else 'b'
-        priority_chars = ['R', 'C', 'N'] if my_color == 'r' else ['r', 'c', 'n']
-        for target_char in priority_chars:
-            for pos in sorted(self.board.dark_positions):
-                if 0 <= pos < 90:
-                    piece = self.visible_board.cells[pos]
-                    if piece == target_char:
-                        my_row = pos // 9
-                        my_col = pos % 9
-                        target_row = my_row + 2 if my_color == 'r' else my_row - 2
-                        if 0 <= target_row <= 9:
-                            target_pos = target_row * 9 + my_col
-                            target_piece = self.visible_board.cells[target_pos] if 0 <= target_pos < 90 else '.'
-                            if target_piece == '.' or target_piece.isupper() != piece.isupper():
-                                uci_move = self.board.pos_to_engine_move(pos, target_pos)
-                                if uci_move and uci_move not in self._rejected_moves:
-                                    print(f"[REVEAL] ★ Reveal {piece} ({uci_move[:2]}) instead of {engine_best_move[:4]}", flush=True)
-                                    return uci_move
-        return engine_best_move
 
     def _decode_piece_id(self, encoded_id):
         color = 'r'
