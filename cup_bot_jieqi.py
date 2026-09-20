@@ -7,6 +7,8 @@ Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork
 BAG updates: gửi kèm moves list để Jieqi sync state
 
 [BẢN SỬA] Bot KHÔNG tự kick/Thoát khi thua — luôn ở lại bàn và ready ván mới.
+
+[BẢN SỬA 1+2] Lưu true_faces từ START_MATCH + detect capture lên quân úp.
 """
 import struct
 import threading
@@ -119,7 +121,7 @@ KICK_MODE = "never"
 KICK_DELAY = 5.0
 SIT_ALONE_TIMEOUT = 300.0
 
-BOT_BET_XU = 50000
+BOT_BET_XU = 1000
 BOT_USE_CREATE_TABLE = True
 BOT_MATCH_DURATION = '5'
 BOT_TURN_DURATION = '30'
@@ -280,7 +282,6 @@ def fetch_session_info():
         tm = re.search(r"var\s+token\s*=\s*(-?\d+)", page_html)
         if not tm: return False
         TOKEN = int(tm.group(1))
-        # FIX: Dùng raw string với dấu nháy đơn để tránh lỗi cú pháp
         nm = re.search(r'var\s+currentPlayerNickName\s*=\s*["\']([^"\']+)["\']', page_html)
         if not nm: return False
         CURRENT_PLAYER_NICKNAME = nm.group(1).strip()
@@ -391,6 +392,8 @@ BAG_ORDER = ['A', 'B', 'N', 'R', 'C', 'P', 'a', 'b', 'n', 'r', 'c', 'p']
 UCI_MOVE_RE = re.compile(r'^[a-i]\d[a-i]\d$')
 UCI_MOVE_WITH_SUFFIX_RE = re.compile(r'^[a-i]\d[a-i]\d[a-zA-Z]?$')
 
+TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
+
 class XiangqiBoardTracker:
     INITIAL_FEN = "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w"
 
@@ -411,6 +414,38 @@ class XiangqiBoardTracker:
         self.flip = False
         self.flip_known = False
         self.side_to_move = 'w'
+        # ★ NEW (sửa 1): pos -> fen_char thật (biết từ START_MATCH, mỗi ván xáo trộn khác)
+        self.true_faces = {}
+        # ★ NEW (sửa 1): các pos đã mất quân (bị ăn hoặc đi đi)
+        self.lost_pieces = set()
+
+    # ★ NEW (sửa 2): tiện ích true_faces
+    def true_face_at(self, pos):
+        """Trả về fen_char thật của quân ở pos, hoặc None nếu không biết/trống."""
+        return self.true_faces.get(pos)
+
+    def set_true_face(self, pos, fen_char):
+        """Ghi nhận face thật cho 1 vị trí."""
+        if fen_char:
+            self.true_faces[pos] = fen_char
+
+    def move_true_face(self, source_pos, target_pos):
+        """Di chuyển face thật khi quân đi từ source -> target.
+        Quân ở target (nếu có) bị ăn -> xóa."""
+        face = self.true_faces.pop(source_pos, None)
+        eaten = self.true_faces.pop(target_pos, None)
+        if eaten:
+            self.lost_pieces.add(target_pos)
+        if face:
+            self.true_faces[target_pos] = face
+        return face, eaten
+
+    def remove_true_face(self, pos):
+        """Xóa face thật khi quân bị ăn."""
+        face = self.true_faces.pop(pos, None)
+        if face:
+            self.lost_pieces.add(pos)
+        return face
 
     def pos_to_rc(self, pos):
         s_row, col = pos // 9, pos % 9
@@ -453,6 +488,8 @@ class XiangqiBoardTracker:
         self.uci_moves = []
         self.revealed_chars = []
         self.dark_positions.clear()
+        self.true_faces.clear()
+        self.lost_pieces.clear()
 
     def record_move(self, mv, revealed_char=None):
         uci = mv + (revealed_char or "")
@@ -516,54 +553,41 @@ class XiangqiBoardTracker:
         return True, "ok"
 
 class VisibleBoard:
-    """Tracks actual piece positions for 'see-all' mode.
-    
-    Maintains a 90-cell board with actual piece types (from raw_face).
-    Used to generate standard xiangqi FEN for the engine.
-    """
+    """Tracks actual piece positions for 'see-all' mode."""
     TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
-    
+
     def __init__(self):
-        self.cells = ['.'] * 90  # 90 positions, '.' = empty
+        self.cells = ['.'] * 90
         self.side_to_move = 'w'
-        
+
     def reset(self):
         self.cells = ['.'] * 90
         self.side_to_move = 'w'
-    
+
     def set_from_pieces(self, pieces, flip):
-        """Set board from START_MATCH pieces list.
-        pieces: [(sid, face, position, is_open), ...]
-        flip: board flip state (from XiangqiBoardTracker)
-        """
         self.cells = ['.'] * 90
         for sid, face, position, is_open in pieces:
             if position < 0 or position >= 90:
                 continue
             if len(face) >= 2:
-                color = face[0]  # 'r' or 'b'
+                color = face[0]
                 piece_type = int(face[1])
                 fen_char = self.TYPE_TO_FEN.get(piece_type, '?')
                 if color == 'r':
                     fen_char = fen_char.upper()
                 self.cells[position] = fen_char
-    
+
     def apply_move(self, source_pos, target_pos):
-        """Move a piece from source to target."""
         if 0 <= source_pos < 90 and 0 <= target_pos < 90:
             self.cells[target_pos] = self.cells[source_pos]
             self.cells[source_pos] = '.'
-    
+
     def flip_side(self):
         self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
-    
+
     def to_fen(self, flip=False):
-        """Convert to FEN string.
-        Server positions: pos = row * 9 + col (row 0 = RED bottom, row 9 = BLACK top)
-        FEN format: row 9 first (top), row 0 last (bottom)
-        """
         rows = []
-        for board_row in range(9, -1, -1):  # row 9 → row 0
+        for board_row in range(9, -1, -1):
             fen_str = ""
             empty = 0
             for col in range(9):
@@ -741,10 +765,6 @@ class JieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # ★ Use "position startpos moves ..." — PikaJieQi's native format
-            # PikaJieQi auto-tracks BAG and dark piece reveals from move suffixes
-            # BAG updates correctly: c3c4N → N2→N1 in BAG
-            # Engine uses BAG for expected value calculation in flip_search
             cmd = "position startpos"
             if moves:
                 cmd += " moves " + " ".join(moves)
@@ -789,6 +809,7 @@ class JieqiEngine:
         print(f"[ENGINE] bestmove timeout after stop")
         self._engine_searching = False
         return self._latest_bestmove
+
 
 class JieqiCupBot:
     def __init__(self):
@@ -873,7 +894,6 @@ class JieqiCupBot:
     def _on_message(self, ws, message):
         self.last_recv_timestamp = time.time()
         if isinstance(message, bytes):
-            # ★ WS frame dump: log all incoming binary frames
             try:
                 from ws_frame_dump import log_incoming_frame
                 log_incoming_frame(message)
@@ -1286,16 +1306,40 @@ class JieqiCupBot:
                     print(f"[FEN] ❌ Still bad ({_why2})")
                     self.board.flip = not self.board.flip
             self.board.set_base(_built_fen, 'w')
-            
+
             # ★ Set visible board from actual piece data
             self.visible_board.set_from_pieces(board_pieces, self.board.flip)
             self.visible_board.side_to_move = 'w'
+
+            # ★ NEW (sửa 1+2): lưu true_faces cho TẤT CẢ quân (kể cả úp)
             for sid, face, position, is_open in board_pieces:
-                if not is_open and 0 <= position < 90:
+                if position < 0 or position >= 90:
+                    continue
+                if not is_open:
                     self.board.dark_positions.add(position)
                 piece_type = int(face[1]) if len(face) > 1 else 0
+                # Lưu face thật
+                if len(face) > 1:
+                    color = face[0]
+                    fen_char = TYPE_TO_FEN.get(piece_type, '?')
+                    if color == 'r':
+                        fen_char = fen_char.upper()
+                    self.board.set_true_face(position, fen_char)
+                # Đánh dấu tốt đã cố định
                 if piece_type == 7 and position not in STANDARD_PAWN_POSITIONS:
                     self.fixed_pawn_positions.add(position)
+
+            # ★ NEW: log tóm tắt true_faces
+            if self.board.true_faces:
+                n_dark_known = sum(1 for p in self.board.dark_positions
+                                   if p in self.board.true_faces)
+                print(f"[TRACK] 🧠 Đã giải mã {len(self.board.true_faces)} quân, "
+                      f"trong đó {n_dark_known} quân úp")
+                sample = list(self.board.true_faces.items())[:5]
+                sample_str = ", ".join(f"{p}:{c}" for p, c in sample)
+                print(f"[TRACK] 🔍 Sample true_faces: {sample_str} "
+                      f"(+{max(0, len(self.board.true_faces)-len(sample))} more)")
+
             if self.fixed_pawn_positions:
                 print(f"[GAME] 🛡️ {len(self.fixed_pawn_positions)} locked pawns")
             self.board.revealed_chars = []
@@ -1326,7 +1370,6 @@ class JieqiCupBot:
             if position < 0 or position >= 90: continue
             fen_row, col = self.board.pos_to_rc(position)
             # ★ SEE ALL PIECES: use decoded face for ALL pieces (even hidden)
-            # Server sends raw_face = actual piece type for every piece
             if len(face) > 1:
                 color = face[0]; piece_type = int(face[1])
                 type_to_fen = {1: 'k', 2: 'a', 3: 'b', 4: 'r',
@@ -1379,13 +1422,35 @@ class JieqiCupBot:
                 rest = list(msg.data[msg.offset:]) if msg.offset < len(msg.data) else []
                 mover_dark = source_pos in self.board.dark_positions
                 is_flip_move = (source_pos == target_pos)
+                captured_dark = target_pos in self.board.dark_positions
+                captured_face_known = self.board.true_face_at(target_pos)
+
                 revealed_char = None
                 if (mover_dark or is_flip_move) and rest and rest[0] > 0 and len(rest) >= 3:
                     cand = self._sid_to_fen_char(rest[2])
                     if cand and cand not in ('k', 'K'):
                         revealed_char = cand
+
+                # ★ NEW (sửa 2): xử lý quân úp BỊ ĂN
+                if captured_dark and captured_face_known:
+                    server_reveal = (self._sid_to_fen_char(rest[2])
+                                     if rest and len(rest) >= 3 and rest[0] > 0 else None)
+                    print(f"[CAPTURE] 🎯 Quân úp ở {target_pos} bị ăn, "
+                          f"thực tế là '{captured_face_known}' "
+                          f"(server_reveal={server_reveal or 'None'})", flush=True)
+                    if server_reveal and server_reveal != captured_face_known:
+                        print(f"[CAPTURE] ⚠️ Mismatch: server='{server_reveal}' "
+                              f"vs true='{captured_face_known}'", flush=True)
+                    # Nếu server KHÔNG gửi reveal → tự append để BAG đúng
+                    if not revealed_char:
+                        self.board.revealed_chars.append(captured_face_known)
+
                 self.board.dark_positions.discard(source_pos)
                 self.board.dark_positions.discard(target_pos)
+
+                # ★ NEW (sửa 2): cập nhật true_faces
+                self.board.move_true_face(source_pos, target_pos)
+
                 full_uci = engine_move + (revealed_char or "")
                 now = time.time()
                 if (self._last_move_uci == full_uci
@@ -1603,7 +1668,7 @@ class JieqiCupBot:
         threading.Thread(target=loop, daemon=True).start()
 
     def run(self):
-        print("[BOT] Khởi chạy cờ úp Jieqi v1.1 (stay-on-lose)...")
+        print("[BOT] Khởi chạy cờ úp Jieqi v1.2 (stay-on-lose + true_faces)...")
         while True:
             try:
                 now_ts = time.time()
@@ -1717,6 +1782,7 @@ class JieqiCupBot:
             try: self.ws.close()
             except: pass
 
+
 def acquire_single_instance_lock():
     try:
         import fcntl
@@ -1732,6 +1798,7 @@ def acquire_single_instance_lock():
         return f
     except ImportError:
         return None
+
 
 if __name__ == "__main__":
     _lock = acquire_single_instance_lock()
