@@ -108,6 +108,12 @@ PIKAJIEQI_BINARY_CANDIDATES = [
 ]
 
 ENGINE_MULTIPV = 1
+# raw_face trong START_MATCH chứa loại quân thật; dùng nó để engine không
+# tiếp tục đoán quân đã lộ từ vị trí chuẩn của cờ úp.
+ENGINE_USE_REVEALED_BOARD = os.environ.get(
+    "JIEQI_USE_REVEALED_BOARD", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+ENGINE_PONDER = False
 MIN_MOVE_SECONDS = 3.0
 MOVE_DEADLINE_SECONDS = 30.0
 MAX_SAFE_MOVES = 250
@@ -526,10 +532,12 @@ class VisibleBoard:
     def __init__(self):
         self.cells = ['.'] * 90  # 90 positions, '.' = empty
         self.side_to_move = 'w'
-        
+        self.known_piece_count = 0
+
     def reset(self):
         self.cells = ['.'] * 90
         self.side_to_move = 'w'
+        self.known_piece_count = 0
     
     def set_from_pieces(self, pieces, flip):
         """Set board from START_MATCH pieces list.
@@ -537,6 +545,7 @@ class VisibleBoard:
         flip: board flip state (from XiangqiBoardTracker)
         """
         self.cells = ['.'] * 90
+        self.known_piece_count = 0
         for sid, face, position, is_open in pieces:
             if position < 0 or position >= 90:
                 continue
@@ -544,9 +553,12 @@ class VisibleBoard:
                 color = face[0]  # 'r' or 'b'
                 piece_type = int(face[1])
                 fen_char = self.TYPE_TO_FEN.get(piece_type, '?')
+                if fen_char == '?':
+                    continue
                 if color == 'r':
                     fen_char = fen_char.upper()
                 self.cells[position] = fen_char
+                self.known_piece_count += 1
     
     def apply_move(self, source_pos, target_pos):
         """Move a piece from source to target."""
@@ -556,11 +568,19 @@ class VisibleBoard:
     
     def flip_side(self):
         self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
-    
-    def to_fen(self, flip=False):
+
+    def reveal(self, position, fen_char):
+        """Apply a revealed piece to a square, including a flip move."""
+        if 0 <= position < 90 and fen_char in 'KABRNCPkab rncp'.replace(' ', ''):
+            self.cells[position] = fen_char
+
+    def to_fen(self, bag='-'):
         """Convert to FEN string.
         Server positions: pos = row * 9 + col (row 0 = RED bottom, row 9 = BLACK top)
         FEN format: row 9 first (top), row 0 last (bottom)
+
+        Pikafish-Jieqi expects ``board side bag 0 1`` rather than the
+        standard ``board side castling en-passant ...`` fields.
         """
         rows = []
         for board_row in range(9, -1, -1):  # row 9 → row 0
@@ -579,7 +599,16 @@ class VisibleBoard:
             if empty > 0:
                 fen_str += str(empty)
             rows.append(fen_str)
-        return '/'.join(rows) + ' ' + self.side_to_move + ' - - 0 1'
+        return '/'.join(rows) + ' ' + self.side_to_move + ' ' + (bag or '-') + ' 0 1'
+
+    def is_complete(self):
+        """Return True when the server supplied a usable full position."""
+        return (
+            self.known_piece_count >= 2
+            and 'K' in self.cells
+            and 'k' in self.cells
+            and '?' not in self.cells
+        )
 
 
 class JieqiEngine:
@@ -621,6 +650,11 @@ class JieqiEngine:
             except Exception:
                 pass
             self.proc = None
+        self._readyok = False
+        self._latest_bestmove = None
+        self._engine_searching = False
+        with self._lines_lock:
+            self._stdout_lines.clear()
         try:
             self.proc = subprocess.Popen(
                 [self.binary_path],
@@ -681,6 +715,9 @@ class JieqiEngine:
                 _threads = max(1, min(2, (os.cpu_count() or 2) - 1))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
                 self.proc.stdin.write("setoption name Hash value 128\n")
+                self.proc.stdin.write(
+                    f"setoption name Ponder value {'true' if ENGINE_PONDER else 'false'}\n"
+                )
                 self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
                 self.proc.stdin.write("isready\n")
@@ -741,31 +778,28 @@ class JieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # ★ Use "position startpos moves ..." — PikaJieQi's native format
-            # PikaJieQi auto-tracks BAG and dark piece reveals from move suffixes
-            # BAG updates correctly: c3c4N → N2→N1 in BAG
-            # Engine uses BAG for expected value calculation in flip_search
-            cmd = "position startpos"
-            if moves:
-                cmd += " moves " + " ".join(moves)
+            board_part = fen.split()[0] if fen else ""
+            # A full FEN is already the current position, so appending the
+            # historical moves would apply them twice.  Only use startpos for
+            # the mystery fallback, where reveal suffixes are part of the
+            # position history understood by PikaJieQi.
+            if ENGINE_USE_REVEALED_BOARD and "X" not in board_part and "x" not in board_part:
+                cmd = "position fen " + fen
+            else:
+                cmd = "position startpos"
+                if moves:
+                    cmd += " moves " + " ".join(moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
-                self.proc.stdin.write("go infinite\n")
+                self.proc.stdin.write(f"go movetime {max(100, int(movetime_ms))}\n")
                 self.proc.stdin.flush()
         except Exception as e:
             print(f"[ENGINE] Send error: {e}")
             self._engine_searching = False
             return None
-        time.sleep(movetime_ms / 1000.0)
-        try:
-            with self.engine_lock:
-                self.proc.stdin.write("stop\n")
-                self.proc.stdin.flush()
-        except Exception:
-            pass
         t0 = time.time()
-        timeout = 2.0
+        timeout = max(2.0, movetime_ms / 1000.0 + 2.0)
         while time.time() - t0 < timeout:
             if self._latest_bestmove:
                 self._engine_searching = False
@@ -786,6 +820,13 @@ class JieqiEngine:
                 self._engine_searching = False
                 return None
             time.sleep(0.02)
+        # Engines that do not implement go movetime still get a clean stop.
+        try:
+            with self.engine_lock:
+                self.proc.stdin.write("stop\n")
+                self.proc.stdin.flush()
+        except Exception:
+            pass
         print(f"[ENGINE] bestmove timeout after stop")
         self._engine_searching = False
         return self._latest_bestmove
@@ -1396,6 +1437,8 @@ class JieqiCupBot:
                 # ★ Update visible board
                 src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
                 self.visible_board.apply_move(src_pos, tgt_pos)
+                if revealed_char:
+                    self.visible_board.reveal(tgt_pos, revealed_char)
                 self.visible_board.flip_side()
                 self._last_move_uci = full_uci
                 self._last_move_time = now
@@ -1552,9 +1595,16 @@ class JieqiCupBot:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
         movetime_ms = 3000
-        fen, moves = self.board.get_current_fen()
+        fallback_fen, moves = self.board.get_current_fen()
+        if ENGINE_USE_REVEALED_BOARD and self.visible_board.is_complete():
+            fen = self.visible_board.to_fen(self.board.bag_string())
+            position_mode = "full-board FEN"
+        else:
+            fen = fallback_fen
+            position_mode = "mystery startpos"
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
-        print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
+        print(f"[ENGINE-IN] mode={position_mode}, moves({len(moves)}), "
+              f"movetime={movetime_ms}ms, remain={remain:.1f}s",
               flush=True)
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
         if not raw:
