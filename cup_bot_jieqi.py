@@ -741,13 +741,11 @@ class JieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # ★ Use "position startpos moves ..." — PikaJieQi's native format
-            # PikaJieQi auto-tracks BAG and dark piece reveals from move suffixes
-            # BAG updates correctly: c3c4N → N2→N1 in BAG
-            # Engine uses BAG for expected value calculation in flip_search
-            cmd = "position startpos"
-            if moves:
-                cmd += " moves " + " ".join(moves)
+            # ★ Send CURRENT position as standard xiangqi FEN
+            # Engine sees ALL pieces (from raw_face) — plays as regular xiangqi
+            # No X/x, no BAG, no moves list — engine gets exact current position
+            clean_fen = self.visible_board.to_fen()
+            cmd = f"position fen {clean_fen}"
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -1586,6 +1584,9 @@ class JieqiCupBot:
                   f"| uci={len(self.board.uci_moves)}", flush=True)
             self._last_sent_move = best_move
             self.send_play(source_pos, target_pos)
+            # ★ Update visible board for our own move
+            self.visible_board.apply_move(source_pos, target_pos)
+            self.visible_board.flip_side()
         except Exception as e:
             print(f"[BOT ERROR] {e}")
             traceback.print_exc()
