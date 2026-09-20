@@ -1,14 +1,8 @@
 """
-cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (cppjieqi) thay cho PKJQ.exe
-Khác biệt vs cup_bot.py:
-Engine: pikajieqi-native (C++ native, không cần wine)
-Movetime: 2000ms (~2s/nước cho nhanh)
-Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork-and-think)
-BAG updates: gửi kèm moves list để Jieqi sync state
-
-[BẢN SỬA] Bot KHÔNG tự kick/Thoát khi thua — luôn ở lại bàn và ready ván mới.
-
-[BẢN SỬA 1+2] Lưu true_faces từ START_MATCH + detect capture lên quân úp.
+cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (pikajieqi-native)
+SỬA LỖI CỐT LÕI: Gửi chính xác FEN (bao gồm X/x và BAG) thay vì 'startpos' 
+                 để engine nhận diện và tận dụng được quân úp thật sự.
+HÀNH VI: KHÔNG kick, KHÔNG rời bàn khi thua. Luôn ở lại và ready ván mới.
 """
 import struct
 import threading
@@ -23,11 +17,10 @@ import tempfile
 import json
 import random
 import traceback
-import shutil
 import urllib.request, urllib.parse, http.cookiejar
 
 # ============================================================================
-# HTTP SESSION (giữ nguyên từ cup_bot.py)
+# HTTP SESSION
 # ============================================================================
 class _UrllibSession:
     def __init__(self):
@@ -117,11 +110,8 @@ TRUST_ENGINE_AFTER = 100
 MAX_ENGINE_RESTARTS_PER_GAME = 2
 MOVE_DEDUP_WINDOW = 0.1
 
-KICK_MODE = "never"
-KICK_DELAY = 5.0
 SIT_ALONE_TIMEOUT = 300.0
-
-BOT_BET_XU = 1000
+BOT_BET_XU = 20000
 BOT_USE_CREATE_TABLE = True
 BOT_MATCH_DURATION = '5'
 BOT_TURN_DURATION = '30'
@@ -129,12 +119,12 @@ BOT_ACC_DURATION = '0'
 BOT_BLOCK_SOFTWARE = '0'
 
 VN_TEN_DAU = [
-    "Tuấn ",  "Minh ",  "Đức ",  "Hoàng ",  "Huy ",  "Hùng ",  "Dũng ",  "Cường ",  "Long ",  "Nam ",
-    "Sơn ",  "Hải ",  "Phong ",  "Thắng ",  "Trung ",  "Kiên ",  "Quân ",  "Thanh ",  "Đạt ",  "Khoa ",
+    "Tuấn ", "Minh ", "Đức ", "Hoàng ", "Huy ", "Hùng ", "Dũng ", "Cường ", "Long ", "Nam ",
+    "Sơn ", "Hải ", "Phong ", "Thắng ", "Trung ", "Kiên ", "Quân ", "Thanh ", "Đạt ", "Khoa ",
 ]
 VN_TEN_KHONG_DAU = [
-    "Tuan ",  "Minh ",  "Duc ",  "Hoang ",  "Huy ",  "Hung ",  "Dung ",  "Cuong ",  "Long ",  "Nam ",
-    "Son ",  "Hai ",  "Phong ",  "Thang ",  "Trung ",  "Kien ",  "Quan ",  "Thanh ",  "Dat ",  "Khoa ",
+    "Tuan ", "Minh ", "Duc ", "Hoang ", "Huy ", "Hung ", "Dung ", "Cuong ", "Long ", "Nam ",
+    "Son ", "Hai ", "Phong ", "Thang ", "Trung ", "Kien ", "Quan ", "Thanh ", "Dat ", "Khoa ",
 ]
 
 _IDENTITY_SYNCED = False
@@ -172,8 +162,7 @@ def sync_profile_name(session):
         data['OLD_PASSWORD'] = PASSWD
         data['SAVE'] = '\uf046'
         session.post(action, timeout=15, data=data,
-                     headers={'Origin': 'https://gamevh.net',
-                              'Referer': page.url,
+                     headers={'Origin': 'https://gamevh.net', 'Referer': page.url,
                               'Content-Type': 'application/x-www-form-urlencoded'},
                      allow_redirects=True)
         print(f"[PROFILE] 👤 '{old_full_name}' -> '{new_full_name}'")
@@ -186,11 +175,8 @@ def sync_random_avatar(session):
         before = session.get(profile_url, timeout=15)
         m = re.search(r'/avatar/builtin(\d+).(?:webp|png|jpg)', before.text, re.I)
         old_avatar = int(m.group(1)) if m else None
-        catalog = []
-        seen = set()
-        pattern = re.compile(
-            r'''buyAvatar\(\s*(["']?)(\d+)\1\s*,\s*(["'])(.*?)\3\s*,\s*(["']?)([\d,.]+)\5\s*\)''',
-            re.I | re.S)
+        catalog, seen = [], set()
+        pattern = re.compile(r'''buyAvatar\(\s*(["']?)(\d+)\1\s*,\s*(["'])(.*?)\3\s*,\s*(["']?)([\d,.]+)\5\s*\)''', re.I | re.S)
         for category in range(1, 7):
             url = f"https://gamevh.net/com/ftl/game/profile/avatar_by_category.jsp?excludeLayout=true&category_id={category}"
             page = session.get(url, timeout=15)
@@ -203,10 +189,7 @@ def sync_random_avatar(session):
         if not choices: return
         selected = random.choice(choices)
         update_url = f"https://gamevh.net/com/ftl/game/profile/update_avatar.jsp?pk={selected}&redirect=/"
-        session.post(update_url, timeout=20,
-                     headers={"Origin": "https://gamevh.net",
-                              "Referer": "https://gamevh.net/com/ftl/game/profile/avatar.jsp"},
-                     allow_redirects=True)
+        session.post(update_url, timeout=20, headers={"Origin": "https://gamevh.net", "Referer": "https://gamevh.net/com/ftl/game/profile/avatar.jsp"}, allow_redirects=True)
     except Exception as e:
         print(f"[PROFILE] Lỗi avatar: {e}")
 
@@ -231,8 +214,7 @@ def get_active_bot_tables():
         if not content: return {}
         data = json.loads(content)
         now = time.time()
-        return {tp: info for tp, info in data.items()
-                if isinstance(info, dict) and now - info.get("timestamp", 0) < 180}
+        return {tp: info for tp, info in data.items() if isinstance(info, dict) and now - info.get("timestamp", 0) < 180}
     except Exception:
         return {}
 
@@ -242,37 +224,24 @@ def register_bot_table(table_path, user):
         data = get_active_bot_tables()
         data[table_path] = {"user": user, "timestamp": time.time(), "pid": os.getpid()}
         with open(ACTIVE_TABLES_FILE, 'w') as f: json.dump(data, f)
-    except Exception:
-        pass
+    except Exception: pass
 
 def unregister_bot_table(table_path):
     if not table_path: return
     try:
         data = get_active_bot_tables()
-        if table_path in data:
-            data.pop(table_path, None)
+        data.pop(table_path, None)
         with open(ACTIVE_TABLES_FILE, 'w') as f: json.dump(data, f)
-    except Exception:
-        pass
+    except Exception: pass
 
 def fetch_session_info():
     global COOKIE, TOKEN, CURRENT_PLAYER_NICKNAME, CURRENT_PLAYER_ID, PLACE_PATH, _IDENTITY_SYNCED
     try:
         session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                           "(KHTML, like Gecko) Chrome/139.0 Safari/537.36",
-            "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.7",
-        })
+        session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0 Safari/537.36", "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.7"})
         session.get(LOGIN_URL, timeout=20)
-        session.post(
-            LOGIN_URL, timeout=20,
-            data={"redirect": "/", "USER_NAME": USER, "PASSWORD": PASSWD,
-                  "AUTO_LOGIN": "true", "LOGIN": "Đăng nhập"},
-            headers={"Origin": "https://gamevh.net",
-                     "Referer": LOGIN_URL,
-                     "Content-Type": "application/x-www-form-urlencoded"},
-            allow_redirects=True)
+        session.post(LOGIN_URL, timeout=20, data={"redirect": "/", "USER_NAME": USER, "PASSWORD": PASSWD, "AUTO_LOGIN": "true", "LOGIN": "Đăng nhập"},
+                     headers={"Origin": "https://gamevh.net", "Referer": LOGIN_URL, "Content-Type": "application/x-www-form-urlencoded"}, allow_redirects=True)
         if not _IDENTITY_SYNCED:
             _IDENTITY_SYNCED = True
             sync_profile_name(session)
@@ -289,11 +258,7 @@ def fetch_session_info():
         if pid: CURRENT_PLAYER_ID = int(pid.group(1))
         pm = re.search(r'var\s+placePath\s*=\s*["\']([^"\']+)["\']', page_html)
         if pm: PLACE_PATH = pm.group(1)
-        try:
-            cookie_parts = [f"{c.name}={c.value}" for c in session.cookies]
-            COOKIE = "; ".join(cookie_parts)
-        except Exception:
-            COOKIE = "; ".join(f"{k}={v}" for k, v in session.cookies.items())
+        COOKIE = "; ".join([f"{c.name}={c.value}" for c in session.cookies])
         print(f"[SESSION] Login OK | Token: {TOKEN} | Nick: {CURRENT_PLAYER_NICKNAME} | ID: {CURRENT_PLAYER_ID}")
         return True
     except Exception as e:
@@ -301,14 +266,10 @@ def fetch_session_info():
         return False
 
 CMD_NAMES = {
-    300: "PONG", 301: "PING", 302: "LOGIN", 303: "ALERT",
-    311: "BROADCAST", 314: "SET_CLIENT_MODE", 315: "CONFIG",
-    331: "CHAT.SEND", 335: "CHAT.MSG",
-    401: "ENTER_PLACE", 405: "CREATE_RULE", 406: "PLAYER_ENTERED", 407: "PLAYER_EXITED",
-    408: "QUICK_PLAY", 410: "KICK_PLAYER", 412: "LIST_ZONE_ROOM", 413: "LIST_BET_AMT",
-    414: "GET_TABLE_DATA", 416: "SLOT_IN_TABLE_CHANGED",
-    417: "START_MATCH", 418: "GAMEOVER", 419: "ENTER_STATE",
-    420: "SET_TURN", 434: "SET_READY",
+    300: "PONG", 301: "PING", 302: "LOGIN", 303: "ALERT", 311: "BROADCAST", 314: "SET_CLIENT_MODE", 315: "CONFIG",
+    331: "CHAT.SEND", 335: "CHAT.MSG", 401: "ENTER_PLACE", 405: "CREATE_RULE", 406: "PLAYER_ENTERED", 407: "PLAYER_EXITED",
+    408: "QUICK_PLAY", 410: "KICK_PLAYER", 412: "LIST_ZONE_ROOM", 413: "LIST_BET_AMT", 414: "GET_TABLE_DATA",
+    416: "SLOT_IN_TABLE_CHANGED", 417: "START_MATCH", 418: "GAMEOVER", 419: "ENTER_STATE", 420: "SET_TURN", 434: "SET_READY",
     502: "PLAY", 529: "MOVE", 533: "ASK_DRAW", 534: "SURRENDER", 601: "LOGIN_EX",
 }
 
@@ -323,7 +284,6 @@ class Conn:
             result.extend(struct.pack('>H', cmd))
         result.extend(data)
         return bytes(result)
-
     def pack_byte(self, value): return struct.pack('>b', value)
     def pack_int(self, value): return struct.pack('>i', value)
     def pack_ascii(self, value):
@@ -338,7 +298,6 @@ class InboundMessage:
         self.data = bytes(data)
         self.offset = 0
         self.command = self._parse_command()
-
     def _parse_command(self):
         length = self.read_byte()
         if length < 0:
@@ -349,7 +308,6 @@ class InboundMessage:
             next_byte = self.data[self.offset] & 0xFF
             self.offset += 1
             return CMD_NAMES.get((length << 8) | next_byte, str((length << 8) | next_byte))
-
     def read_byte(self):
         val = struct.unpack_from('>b', self.data, self.offset)[0]
         self.offset += 1
@@ -385,14 +343,11 @@ for _c in [0, 2, 4, 6, 8]:
     STANDARD_PAWN_POSITIONS.add(6 * 9 + _c)
     STANDARD_PAWN_POSITIONS.add(3 * 9 + _c)
 
-INITIAL_BAG = {'A': 2, 'B': 2, 'N': 2, 'R': 2, 'C': 2, 'P': 5,
-               'a': 2, 'b': 2, 'n': 2, 'r': 2, 'c': 2, 'p': 5}
+INITIAL_BAG = {'A': 2, 'B': 2, 'N': 2, 'R': 2, 'C': 2, 'P': 5, 'a': 2, 'b': 2, 'n': 2, 'r': 2, 'c': 2, 'p': 5}
 BAG_ORDER = ['A', 'B', 'N', 'R', 'C', 'P', 'a', 'b', 'n', 'r', 'c', 'p']
 
 UCI_MOVE_RE = re.compile(r'^[a-i]\d[a-i]\d$')
 UCI_MOVE_WITH_SUFFIX_RE = re.compile(r'^[a-i]\d[a-i]\d[a-zA-Z]?$')
-
-TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
 
 class XiangqiBoardTracker:
     INITIAL_FEN = "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w"
@@ -414,38 +369,6 @@ class XiangqiBoardTracker:
         self.flip = False
         self.flip_known = False
         self.side_to_move = 'w'
-        # ★ NEW (sửa 1): pos -> fen_char thật (biết từ START_MATCH, mỗi ván xáo trộn khác)
-        self.true_faces = {}
-        # ★ NEW (sửa 1): các pos đã mất quân (bị ăn hoặc đi đi)
-        self.lost_pieces = set()
-
-    # ★ NEW (sửa 2): tiện ích true_faces
-    def true_face_at(self, pos):
-        """Trả về fen_char thật của quân ở pos, hoặc None nếu không biết/trống."""
-        return self.true_faces.get(pos)
-
-    def set_true_face(self, pos, fen_char):
-        """Ghi nhận face thật cho 1 vị trí."""
-        if fen_char:
-            self.true_faces[pos] = fen_char
-
-    def move_true_face(self, source_pos, target_pos):
-        """Di chuyển face thật khi quân đi từ source -> target.
-        Quân ở target (nếu có) bị ăn -> xóa."""
-        face = self.true_faces.pop(source_pos, None)
-        eaten = self.true_faces.pop(target_pos, None)
-        if eaten:
-            self.lost_pieces.add(target_pos)
-        if face:
-            self.true_faces[target_pos] = face
-        return face, eaten
-
-    def remove_true_face(self, pos):
-        """Xóa face thật khi quân bị ăn."""
-        face = self.true_faces.pop(pos, None)
-        if face:
-            self.lost_pieces.add(pos)
-        return face
 
     def pos_to_rc(self, pos):
         s_row, col = pos // 9, pos % 9
@@ -458,15 +381,13 @@ class XiangqiBoardTracker:
     def pos_to_engine_move(self, source_pos, target_pos):
         s_row, s_col = self.pos_to_rc(source_pos)
         t_row, t_col = self.pos_to_rc(target_pos)
-        return (f"{chr(ord('a') + s_col)}{9 - s_row}"
-                f"{chr(ord('a') + t_col)}{9 - t_row}")
+        return f"{chr(ord('a') + s_col)}{9 - s_row}{chr(ord('a') + t_col)}{9 - t_row}"
 
     def engine_move_to_pos(self, engine_move):
         move = engine_move[:4]
         s_col, s_rank = ord(move[0]) - ord('a'), int(move[1])
         t_col, t_rank = ord(move[2]) - ord('a'), int(move[3])
-        return (self.rc_to_pos(9 - s_rank, s_col),
-                self.rc_to_pos(9 - t_rank, t_col))
+        return self.rc_to_pos(9 - s_rank, s_col), self.rc_to_pos(9 - t_rank, t_col)
 
     def bag_string(self):
         bag = dict(INITIAL_BAG)
@@ -476,6 +397,7 @@ class XiangqiBoardTracker:
         return "".join(f"{k}{bag[k]}" for k in BAG_ORDER)
 
     def get_current_fen(self):
+        # ★ Trả về FEN đầy đủ: Bàn cờ (có X/x) + Túi quân (BAG) + Lượt đi
         fen = f"{self.start_fen} {self.bag_string()} {self.start_side} - - 0 1"
         moves = [m for m in self.uci_moves if UCI_MOVE_WITH_SUFFIX_RE.match(m)]
         return fen, moves
@@ -488,8 +410,6 @@ class XiangqiBoardTracker:
         self.uci_moves = []
         self.revealed_chars = []
         self.dark_positions.clear()
-        self.true_faces.clear()
-        self.lost_pieces.clear()
 
     def record_move(self, mv, revealed_char=None):
         uci = mv + (revealed_char or "")
@@ -505,22 +425,20 @@ class XiangqiBoardTracker:
         self.is_red = (self.my_slot_id == self.first_turn_slot_id)
 
     def detect_flip(self, pieces):
-        red_rows, black_rows = [], []
-        red_king_row = black_king_row = None
+        red_rows, black_rows, red_king_row, black_king_row = [], [], None, None
         for sid, face, position, is_open in pieces:
-            if position is None or position < 0 or position >= 90:
-                continue
+            if position is None or position < 0 or position >= 90: continue
             row = position // 9
             color = face[0] if face else (sid[0] if sid else 'r')
             ptype = int(face[1]) if len(face) > 1 and str(face[1]).isdigit() else 0
-            if ptype == 0 and len(sid) > 1 and str(sid[1]).isdigit():
-                ptype = int(sid[1])
+            if ptype == 0 and len(sid) > 1 and str(sid[1]).isdigit(): ptype = int(sid[1])
             if color == 'r':
                 red_rows.append(row)
                 if ptype == 1: red_king_row = row
             else:
                 black_rows.append(row)
                 if ptype == 1: black_king_row = row
+        
         if red_king_row is not None and black_king_row is not None:
             self.flip = red_king_row < black_king_row
             self.flip_known = True
@@ -540,71 +458,14 @@ class XiangqiBoardTracker:
 
     def sanity_check_fen(self, board_fen):
         rows = board_fen.split(' ')[0].split('/')
-        if len(rows) != 10:
-            return False, f"FEN có {len(rows)} hàng"
+        if len(rows) != 10: return False, f"FEN có {len(rows)} hàng"
         K_row = k_row = None
         for i, r in enumerate(rows):
             if 'K' in r: K_row = i
             if 'k' in r: k_row = i
-        if K_row is None or k_row is None:
-            return False, "thiếu tướng"
-        if K_row < 7 or k_row > 2:
-            return False, f"tướng sai chiều (K hàng {K_row}, k hàng {k_row})"
+        if K_row is None or k_row is None: return False, "thiếu tướng"
+        if K_row < 7 or k_row > 2: return False, f"tướng sai chiều (K hàng {K_row}, k hàng {k_row})"
         return True, "ok"
-
-class VisibleBoard:
-    """Tracks actual piece positions for 'see-all' mode."""
-    TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
-
-    def __init__(self):
-        self.cells = ['.'] * 90
-        self.side_to_move = 'w'
-
-    def reset(self):
-        self.cells = ['.'] * 90
-        self.side_to_move = 'w'
-
-    def set_from_pieces(self, pieces, flip):
-        self.cells = ['.'] * 90
-        for sid, face, position, is_open in pieces:
-            if position < 0 or position >= 90:
-                continue
-            if len(face) >= 2:
-                color = face[0]
-                piece_type = int(face[1])
-                fen_char = self.TYPE_TO_FEN.get(piece_type, '?')
-                if color == 'r':
-                    fen_char = fen_char.upper()
-                self.cells[position] = fen_char
-
-    def apply_move(self, source_pos, target_pos):
-        if 0 <= source_pos < 90 and 0 <= target_pos < 90:
-            self.cells[target_pos] = self.cells[source_pos]
-            self.cells[source_pos] = '.'
-
-    def flip_side(self):
-        self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
-
-    def to_fen(self, flip=False):
-        rows = []
-        for board_row in range(9, -1, -1):
-            fen_str = ""
-            empty = 0
-            for col in range(9):
-                pos = board_row * 9 + col
-                piece = self.cells[pos] if 0 <= pos < 90 else '.'
-                if piece == '.':
-                    empty += 1
-                else:
-                    if empty > 0:
-                        fen_str += str(empty)
-                        empty = 0
-                    fen_str += piece
-            if empty > 0:
-                fen_str += str(empty)
-            rows.append(fen_str)
-        return '/'.join(rows) + ' ' + self.side_to_move + ' - - 0 1'
-
 
 class JieqiEngine:
     def __init__(self):
@@ -619,42 +480,35 @@ class JieqiEngine:
         self._restart_count = 0
         self._stdout_lines = []
         self._lines_lock = threading.Lock()
+        
         for path in PIKAJIEQI_BINARY_CANDIDATES:
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 self.binary_path = path
                 break
+                
         if not self.binary_path:
             print(f"[ENGINE] ❌ Không tìm thấy pikajieqi-native binary. Đã thử: {PIKAJIEQI_BINARY_CANDIDATES}")
             self.engine = False
             return
+            
         print(f"[ENGINE] 🎯 pikajieqi-native = {self.binary_path}")
-
         self._init_engine()
         self.engine = self.proc is not None
 
     def _init_engine(self):
         if self.proc:
             try:
-                self.proc.stdin.write("quit\n")
-                self.proc.stdin.flush()
-                self.proc.wait(timeout=2)
-            except Exception:
-                pass
-            try:
-                self.proc.kill()
-            except Exception:
-                pass
+                self.proc.stdin.write("quit\n"); self.proc.stdin.flush(); self.proc.wait(timeout=2)
+            except Exception: pass
+            try: self.proc.kill()
+            except Exception: pass
             self.proc = None
+            
         try:
-            self.proc = subprocess.Popen(
-                [self.binary_path],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1,
-                cwd=os.path.dirname(self.binary_path),
-            )
+            self.proc = subprocess.Popen([self.binary_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         text=True, bufsize=1, cwd=os.path.dirname(self.binary_path))
         except Exception as e:
-            print(f"[ENGINE] ❌ Popen error: {e}")
-            return
+            print(f"[ENGINE] ❌ Popen error: {e}"); return
 
         def consume_stderr(proc):
             try:
@@ -662,71 +516,56 @@ class JieqiEngine:
                     line = proc.stderr.readline()
                     if not line: break
                     line = line.strip()
-                    if line:
-                        print(f"[PKJQ-DBG] {line}")
-            except Exception:
-                pass
+                    if line: print(f"[PKJQ-DBG] {line}")
+            except Exception: pass
         threading.Thread(target=consume_stderr, args=(self.proc,), daemon=True).start()
 
         def consume_stdout(proc):
             while True:
-                try:
-                    line = proc.stdout.readline()
-                except Exception:
-                    break
+                try: line = proc.stdout.readline()
+                except Exception: break
                 if not line: break
                 line = line.strip()
                 if not line: continue
                 with self._lines_lock:
                     self._stdout_lines.append(line)
-                    if len(self._stdout_lines) > 200:
-                        self._stdout_lines = self._stdout_lines[-100:]
-                if line == "readyok":
-                    self._readyok = True
+                    if len(self._stdout_lines) > 200: self._stdout_lines = self._stdout_lines[-100:]
+                if line == "readyok": self._readyok = True
                 if line.startswith("bestmove"):
                     self._latest_bestmove = line
                     self._engine_searching = False
         threading.Thread(target=consume_stdout, args=(self.proc,), daemon=True).start()
 
         with self.engine_lock:
-            try:
-                self.proc.stdin.write("uci\n")
-                self.proc.stdin.flush()
-            except Exception as e:
-                print(f"[ENGINE] ❌ Send uci error: {e}")
-                return
+            try: self.proc.stdin.write("uci\n"); self.proc.stdin.flush()
+            except Exception as e: print(f"[ENGINE] ❌ Send uci error: {e}"); return
+            
         if not self._wait_for_line("uciok", timeout=30):
-            print("[ENGINE] ❌ uciok timeout")
-            self._kill()
-            return
+            print("[ENGINE] ❌ uciok timeout"); self._kill(); return
+            
         nnue_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikafish.nnue")
         with self.engine_lock:
             try:
                 _threads = max(1, min(2, (os.cpu_count() or 2) - 1))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
                 self.proc.stdin.write("setoption name Hash value 128\n")
-                self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
+                if os.path.exists(nnue_path):
+                    self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
-                self.proc.stdin.write("isready\n")
-                self.proc.stdin.flush()
-            except Exception as e:
-                print(f"[ENGINE] ❌ Config error: {e}")
-                return
+                self.proc.stdin.write("isready\n"); self.proc.stdin.flush()
+            except Exception as e: print(f"[ENGINE] ❌ Config error: {e}"); return
+            
         if not self._wait_for_readyok(timeout=30):
-            print("[ENGINE] ❌ readyok timeout")
-            self._kill()
-            return
+            print("[ENGINE] ❌ readyok timeout"); self._kill(); return
         print("[ENGINE] ✅ pikajieqi-native ready")
 
     def _wait_for_line(self, prefix, timeout=10):
         t0 = time.time()
         while time.time() - t0 < timeout:
-            if self.proc and self.proc.poll() is not None:
-                return False
+            if self.proc and self.proc.poll() is not None: return False
             with self._lines_lock:
                 for l in self._stdout_lines:
-                    if l.startswith(prefix) or l == prefix:
-                        return True
+                    if l.startswith(prefix) or l == prefix: return True
             time.sleep(0.05)
         return False
 
@@ -749,25 +588,33 @@ class JieqiEngine:
 
     def restart(self):
         if self._restart_count >= MAX_ENGINE_RESTARTS_PER_GAME:
-            print(f"[ENGINE] ❌ Quá {MAX_ENGINE_RESTARTS_PER_GAME} restarts")
-            return False
+            print(f"[ENGINE] ❌ Quá {MAX_ENGINE_RESTARTS_PER_GAME} restarts"); return False
         self._restart_count += 1
         print(f"[ENGINE] 🔄 Restart (#{self._restart_count})")
         self._init_engine()
         return self.alive()
 
     def get_best_move(self, fen, moves, movetime_ms=2000):
+        """
+        ★ SỬA LỖI CỐT LÕI: 
+        Thay vì dùng 'position startpos' (khiến engine bỏ qua quân úp X/x), 
+        ta dùng 'position fen {fen}' để truyền chính xác trạng thái bàn cờ 
+        (bao gồm X/x) và túi quân (BAG) mà Python đã tính toán.
+        """
         if not self.alive():
-            if not self.restart():
-                return None
+            if not self.restart(): return None
+            
         self._latest_bestmove = None
         self._engine_searching = True
         with self._lines_lock:
             self._stdout_lines.clear()
+            
         try:
-            cmd = "position startpos"
+            # ★ Gửi FEN đầy đủ (có X/x và BAG string) thay vì startpos
+            cmd = f"position fen {fen}"
             if moves:
                 cmd += " moves " + " ".join(moves)
+                
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -777,13 +624,14 @@ class JieqiEngine:
             print(f"[ENGINE] Send error: {e}")
             self._engine_searching = False
             return None
+            
         time.sleep(movetime_ms / 1000.0)
         try:
             with self.engine_lock:
                 self.proc.stdin.write("stop\n")
                 self.proc.stdin.flush()
-        except Exception:
-            pass
+        except Exception: pass
+        
         t0 = time.time()
         timeout = 2.0
         while time.time() - t0 < timeout:
@@ -796,26 +644,23 @@ class JieqiEngine:
                             if m: self._last_depth = m.group(1)
                             sm = re.search(r'score (cp|mate) (-?\d+)', l)
                             if sm:
-                                if sm.group(1) == "mate":
-                                    self._last_score = f"M{sm.group(2)}"
-                                else:
-                                    self._last_score = f"{int(sm.group(2))/100:+.2f}"
+                                if sm.group(1) == "mate": self._last_score = f"M{sm.group(2)}"
+                                else: self._last_score = f"{int(sm.group(2))/100:+.2f}"
                             break
                 return self._latest_bestmove
             if not self.alive():
                 self._engine_searching = False
                 return None
             time.sleep(0.02)
+            
         print(f"[ENGINE] bestmove timeout after stop")
         self._engine_searching = False
         return self._latest_bestmove
-
 
 class JieqiCupBot:
     def __init__(self):
         self.conn = Conn()
         self.board = XiangqiBoardTracker()
-        self.visible_board = VisibleBoard()
         self.engine = None
         self.ws = None
         self.connected = False
@@ -870,14 +715,9 @@ class JieqiCupBot:
     def connect(self):
         import websocket
         self.connected = False
-        self.ws = websocket.WebSocketApp(
-            WS_URL, cookie=COOKIE,
-            on_open=self._on_open, on_message=self._on_message,
-            on_error=self._on_error, on_close=self._on_close,
-            header={"Origin": "https://gamevh.net"})
-        self.ws_thread = threading.Thread(
-            target=lambda: self.ws.run_forever(ping_interval=30, ping_timeout=None),
-            daemon=True)
+        self.ws = websocket.WebSocketApp(WS_URL, cookie=COOKIE, on_open=self._on_open, on_message=self._on_message,
+                                         on_error=self._on_error, on_close=self._on_close, header={"Origin": "https://gamevh.net"})
+        self.ws_thread = threading.Thread(target=lambda: self.ws.run_forever(ping_interval=30, ping_timeout=None), daemon=True)
         self.ws_thread.start()
         for _ in range(25):
             if self.connected: break
@@ -894,43 +734,25 @@ class JieqiCupBot:
     def _on_message(self, ws, message):
         self.last_recv_timestamp = time.time()
         if isinstance(message, bytes):
-            try:
-                from ws_frame_dump import log_incoming_frame
-                log_incoming_frame(message)
-            except Exception:
-                pass
             self._handle_binary_message(message)
 
     def _on_error(self, ws, error):
         print(f"[WS] ❌ Error: {type(error).__name__}: {error}")
 
     def _on_close(self, ws, code, msg):
-        if self.board.is_playing:
-            print(f"[WS] ⚠️ DISCONNECTED INGAME (code={code})")
-        else:
-            print(f"[WS] Closed (code={code})")
-        if self._connected_since and time.time() - self._connected_since < 60:
-            self._reconnect_streak += 1
-        else:
-            self._reconnect_streak = 0
-        self.connected = False
-        self.logged_in = False
-        self.in_game = False
-        self._joining_table = False
-        self._bet_amts_loaded = False
-        self._resolved_bet_id = None
-        self.bet_amts = []
-        self.fixed_pawn_positions = set()
-        self._thinking = False
-        self._played_this_turn = False
+        if self.board.is_playing: print(f"[WS] ⚠️ DISCONNECTED INGAME (code={code})")
+        else: print(f"[WS] Closed (code={code})")
+        if self._connected_since and time.time() - self._connected_since < 60: self._reconnect_streak += 1
+        else: self._reconnect_streak = 0
+        self.connected = False; self.logged_in = False; self.in_game = False; self._joining_table = False
+        self._bet_amts_loaded = False; self._resolved_bet_id = None; self.bet_amts = []
+        self.fixed_pawn_positions = set(); self._thinking = False; self._played_this_turn = False
         self.board.reset()
 
     def send_message(self, cmd, data=b''):
         if self.ws and self.connected:
-            try:
-                self.ws.send(self.conn.pack(cmd, data), opcode=0x2)
-            except Exception:
-                pass
+            try: self.ws.send(self.conn.pack(cmd, data), opcode=0x2)
+            except Exception: pass
 
     def _send_login(self):
         data = bytearray()
@@ -949,8 +771,7 @@ class JieqiCupBot:
         data.extend(self.conn.pack_byte(mode))
         self.send_message("ENTER_PLACE", bytes(data))
 
-    def send_list_bet_amt(self):
-        self.send_message("LIST_BET_AMT")
+    def send_list_bet_amt(self): self.send_message("LIST_BET_AMT")
 
     def get_1k_to_5k_bet_objs(self):
         if not self.bet_amts: return []
@@ -961,25 +782,17 @@ class JieqiCupBot:
         return [self.bet_amts[0]] if self.bet_amts else []
 
     def is_family_bot(self, name):
-        if not name or name.strip().lower() == CURRENT_PLAYER_NICKNAME.lower():
-            return False
+        if not name or name.strip().lower() == CURRENT_PLAYER_NICKNAME.lower(): return False
         return "." in name
 
     def leave_table(self):
         if self.board.is_playing:
-            print("[TABLE] ⚠️ Ingame, cannot leave!")
-            return
+            print("[TABLE] ⚠️ Ingame, cannot leave!"); return
         print("[TABLE] 🚪 Leaving...")
-        if self._table_path:
-            unregister_bot_table(self._table_path)
-        self.in_game = False
-        self._joining_table = False
-        self._table_path = None
-        self._table_created_by_me = False
-        self._sit_alone_since = None
-        self.slot_players.clear()
-        self.board.reset()
-        self._quick_play_attempts = 0
+        if self._table_path: unregister_bot_table(self._table_path)
+        self.in_game = False; self._joining_table = False; self._table_path = None
+        self._table_created_by_me = False; self._sit_alone_since = None
+        self.slot_players.clear(); self.board.reset(); self._quick_play_attempts = 0
         self._enter_fail_at = 0.0
         self.send_enter_place(PLACE_PATH)
 
@@ -993,19 +806,13 @@ class JieqiCupBot:
 
     def send_create_table(self, bet_amt_id=None):
         now = time.time()
-        if now - self._last_quick_play_time < self._QUICK_PLAY_INTERVAL:
-            return
+        if now - self._last_quick_play_time < self._QUICK_PLAY_INTERVAL: return
         self._last_quick_play_time = now
         if bet_amt_id is None:
             bet_amt_id = self._resolved_bet_id if self._resolved_bet_id is not None else self.resolve_bet_amt_id()
-        if bet_amt_id is None:
-            return
-        args = [
-            ("matchDuration", str(BOT_MATCH_DURATION)),
-            ("turnDuration", str(BOT_TURN_DURATION)),
-            ("accDuration", str(BOT_ACC_DURATION)),
-            ("blockSoftware", str(BOT_BLOCK_SOFTWARE)),
-        ]
+        if bet_amt_id is None: return
+        args = [("matchDuration", str(BOT_MATCH_DURATION)), ("turnDuration", str(BOT_TURN_DURATION)),
+                ("accDuration", str(BOT_ACC_DURATION)), ("blockSoftware", str(BOT_BLOCK_SOFTWARE))]
         data = bytearray()
         data.extend(self.conn.pack_byte(bet_amt_id))
         data.extend(self.conn.pack_byte(len(args)))
@@ -1016,8 +823,7 @@ class JieqiCupBot:
 
     def send_quick_play(self, room_id="", bet_amt_id=-1):
         now = time.time()
-        if now - self._last_quick_play_time < self._QUICK_PLAY_INTERVAL:
-            return
+        if now - self._last_quick_play_time < self._QUICK_PLAY_INTERVAL: return
         self._last_quick_play_time = now
         data = bytearray()
         data.extend(self.conn.pack_ascii(room_id))
@@ -1033,8 +839,7 @@ class JieqiCupBot:
 
     def opponent_player_id(self):
         for sid, pid in self.slot_players.items():
-            if pid and pid != CURRENT_PLAYER_ID and sid != self.board.my_slot_id:
-                return pid
+            if pid and pid != CURRENT_PLAYER_ID and sid != self.board.my_slot_id: return pid
         return None
 
     def send_kick_player(self, player_id):
@@ -1057,39 +862,23 @@ class JieqiCupBot:
             msg = InboundMessage(data)
             cmd = msg.command
             cmd_for_log = cmd
-            if cmd == "PING":
-                self.send_message("PONG")
-            elif cmd == "LOGIN":
-                self._handle_login_response(msg)
-            elif cmd == "ENTER_PLACE":
-                self._handle_enter_place_response(msg)
-            elif cmd == "QUICK_PLAY":
-                self._handle_quick_play_response(msg)
-            elif cmd == "LIST_BET_AMT":
-                self._handle_list_bet_amt_response(msg)
-            elif cmd == "CREATE_RULE":
-                self._handle_create_rule_response(msg)
-            elif cmd == "SLOT_IN_TABLE_CHANGED":
-                self._handle_slot_changed(msg)
-            elif cmd == "PLAYER_ENTERED":
-                self._handle_player_entered(msg)
-            elif cmd == "START_MATCH":
-                self._handle_start_match(msg)
-            elif cmd == "MOVE":
-                self._handle_move(msg)
-            elif cmd == "PLAY" or cmd == "502":
-                self._handle_play_response(msg)
-            elif cmd == "SET_TURN":
-                self._handle_set_turn(msg)
-            elif cmd == "GAMEOVER":
-                self._handle_gameover(msg)
-            elif cmd == "KICK_PLAYER":
-                self._handle_kick_response(msg)
+            if cmd == "PING": self.send_message("PONG")
+            elif cmd == "LOGIN": self._handle_login_response(msg)
+            elif cmd == "ENTER_PLACE": self._handle_enter_place_response(msg)
+            elif cmd == "QUICK_PLAY": self._handle_quick_play_response(msg)
+            elif cmd == "LIST_BET_AMT": self._handle_list_bet_amt_response(msg)
+            elif cmd == "CREATE_RULE": self._handle_create_rule_response(msg)
+            elif cmd == "SLOT_IN_TABLE_CHANGED": self._handle_slot_changed(msg)
+            elif cmd == "PLAYER_ENTERED": self._handle_player_entered(msg)
+            elif cmd == "START_MATCH": self._handle_start_match(msg)
+            elif cmd == "MOVE": self._handle_move(msg)
+            elif cmd == "PLAY" or cmd == "502": self._handle_play_response(msg)
+            elif cmd == "SET_TURN": self._handle_set_turn(msg)
+            elif cmd == "GAMEOVER": self._handle_gameover(msg)
+            elif cmd == "KICK_PLAYER": self._handle_kick_response(msg)
             elif cmd == "ALERT":
-                try:
-                    print(f"[SERVER] ALERT: {msg.read_string()}")
-                except Exception:
-                    pass
+                try: print(f"[SERVER] ALERT: {msg.read_string()}")
+                except Exception: pass
         except Exception as e:
             print(f"[RECV ERROR] cmd={cmd_for_log} err={e}", flush=True)
             traceback.print_exc()
@@ -1109,33 +898,22 @@ class JieqiCupBot:
         if status != 0:
             if self._joining_table:
                 print(f"[TABLE] ENTER_PLACE status={status}")
-                self._joining_table = False
-                self.in_game = True
-                self._enter_fail_at = time.time()
-                threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
-                                 daemon=True).start()
+                self._joining_table = False; self.in_game = True; self._enter_fail_at = time.time()
+                threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)), daemon=True).start()
             return
         if self._joining_table:
-            if is_block_software_message(msg.data):
-                print("[GAME] 🛡️ Anti-software")
-            self._joining_table = False
-            self.in_game = True
-            self._enter_fail_at = 0.0
+            if is_block_software_message(msg.data): print("[GAME] 🛡️ Anti-software")
+            self._joining_table = False; self.in_game = True; self._enter_fail_at = 0.0
             self.last_action_timestamp = time.time()
-            threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
-                             daemon=True).start()
+            threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)), daemon=True).start()
         elif not self.in_game:
             if self._table_path and time.time() - self._table_path_ts < 180:
                 print(f"[TABLE] Rejoin: {self._table_path}")
-                self.in_game = True
-                self._joining_table = True
+                self.in_game = True; self._joining_table = True
                 path = self._table_path
-                threading.Thread(target=lambda: (time.sleep(0.5),
-                                                  self.send_enter_place(path=path, mode=1)),
-                                 daemon=True).start()
+                threading.Thread(target=lambda: (time.sleep(0.5), self.send_enter_place(path=path, mode=1)), daemon=True).start()
                 return
-            self._bet_amts_loaded = False
-            self._resolved_bet_id = None
+            self._bet_amts_loaded = False; self._resolved_bet_id = None
             self.send_list_bet_amt()
 
     def _handle_quick_play_response(self, msg):
@@ -1146,21 +924,12 @@ class JieqiCupBot:
             if table_path in active_tables:
                 owner = active_tables[table_path].get("user", "")
                 if owner.lower() != USER.lower():
-                    print(f"[AVOID] 🛑 Bot table {owner}")
-                    self.in_game = False
-                    self._joining_table = False
-                    return
-            self.in_game = True
-            self._joining_table = True
-            self._table_created_by_me = False
-            self._sit_alone_since = time.time()
-            self._table_path = table_path
-            self._table_path_ts = time.time()
+                    print(f"[AVOID] 🛑 Bot table {owner}"); self.in_game = False; self._joining_table = False; return
+            self.in_game = True; self._joining_table = True; self._table_created_by_me = False
+            self._sit_alone_since = time.time(); self._table_path = table_path; self._table_path_ts = time.time()
             register_bot_table(table_path, USER)
             print(f"[SEARCH] ✅ Table: {table_path}")
-            threading.Thread(target=lambda: (time.sleep(0.5),
-                                              self.send_enter_place(path=table_path, mode=1)),
-                             daemon=True).start()
+            threading.Thread(target=lambda: (time.sleep(0.5), self.send_enter_place(path=table_path, mode=1)), daemon=True).start()
         else:
             self._joining_table = False
 
@@ -1175,123 +944,86 @@ class JieqiCupBot:
         status = msg.read_byte()
         if status == 0:
             table_path = msg.read_ascii()
-            self.in_game = True
-            self._joining_table = True
-            self._table_created_by_me = True
-            self._sit_alone_since = time.time()
-            self._table_path = table_path
-            self._table_path_ts = time.time()
+            self.in_game = True; self._joining_table = True; self._table_created_by_me = True
+            self._sit_alone_since = time.time(); self._table_path = table_path; self._table_path_ts = time.time()
             register_bot_table(table_path, USER)
             print(f"[CREATE] 🎉 {table_path}")
-            threading.Thread(target=lambda: (time.sleep(0.5),
-                                              self.send_enter_place(path=table_path, mode=1)),
-                             daemon=True).start()
+            threading.Thread(target=lambda: (time.sleep(0.5), self.send_enter_place(path=table_path, mode=1)), daemon=True).start()
         else:
-            print(f"[CREATE] ❌ status={status}")
-            self._joining_table = False
+            print(f"[CREATE] ❌ status={status}"); self._joining_table = False
 
     def _handle_player_entered(self, msg):
         try:
-            _ = msg.read_byte()
-            pid = msg.read_long()
-            name = msg.read_string()
+            _ = msg.read_byte(); pid = msg.read_long(); name = msg.read_string()
             if pid > 0 and pid != CURRENT_PLAYER_ID:
                 self.player_names[pid] = name
                 print(f"[PLAYER] 👤 '{name}' (id={pid})")
                 if not self.board.is_playing and self.is_family_bot(name):
                     if self.opponent_player_id() == pid:
-                        print(f"[AVOID] Ally bot -> leave")
-                        self.leave_table()
-        except Exception:
-            pass
+                        print(f"[AVOID] Ally bot -> leave"); self.leave_table()
+        except Exception: pass
 
     def _handle_slot_changed(self, msg):
         try:
-            _ = msg.read_string()
-            slot_id = msg.read_byte()
+            _ = msg.read_string(); slot_id = msg.read_byte()
             msg.read_long(); msg.read_long(); msg.read_byte(); msg.read_short()
             msg.read_ascii(); msg.read_byte(); msg.read_byte()
             player_id = msg.read_long()
-            if player_id > 0:
-                self.slot_players[slot_id] = player_id
-            else:
-                self.slot_players.pop(slot_id, None)
-            if player_id == CURRENT_PLAYER_ID:
-                self.board.my_slot_id = slot_id
+            if player_id > 0: self.slot_players[slot_id] = player_id
+            else: self.slot_players.pop(slot_id, None)
+            
+            if player_id == CURRENT_PLAYER_ID: self.board.my_slot_id = slot_id
             else:
                 if player_id > 0:
                     name = self.player_names.get(player_id, "")
                     print(f"[TABLE] Opponent: pid={player_id}{f', {name}' if name else ''}")
                     if not self.board.is_playing and self.is_family_bot(name):
-                        print(f"[AVOID] Ally -> leave")
-                        self.leave_table()
-                        return
+                        print(f"[AVOID] Ally -> leave"); self.leave_table(); return
                     self._sit_alone_since = None
                     if not self.board.is_playing:
-                        threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
-                                         daemon=True).start()
+                        threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)), daemon=True).start()
                 else:
                     if not self.board.is_playing and self.opponent_player_id() is None:
                         print(f"[TABLE] No opponent, waiting {int(SIT_ALONE_TIMEOUT)}s...")
                         self._sit_alone_since = time.time()
-        except Exception:
-            pass
+        except Exception: pass
 
     def _handle_start_match(self, msg):
         self._game_seq += 1
         print(f"[GAME] 🎮 Match #{self._game_seq}")
-        if self.engine and hasattr(self.engine, "_restart_count"):
-            self.engine._restart_count = 0
-        self._thinking = False
-        self._played_this_turn = False
-        self._turn_started_at = 0.0
-        self._turn_deadline = 0.0
-        self._play_reject_count = 0
-        self._rejected_moves = set()
-        self._last_sent_move = None
-        self._reconnect_streak = 0
-        self._enter_fail_at = 0.0
-        self._sit_alone_since = None
-        self._move_recv_count = 0
-        self._move_skip_count = 0
-        self._move_error_count = 0
-        self._last_move_uci = None
-        self._last_move_time = 0.0
-        self.board.reset()
-        self.fixed_pawn_positions.clear()
-        self.board.is_playing = True
-        self.in_game = True
-        self._joining_table = False
+        if self.engine and hasattr(self.engine, "_restart_count"): self.engine._restart_count = 0
+        self._thinking = False; self._played_this_turn = False; self._turn_started_at = 0.0
+        self._turn_deadline = 0.0; self._play_reject_count = 0; self._rejected_moves = set()
+        self._last_sent_move = None; self._reconnect_streak = 0; self._enter_fail_at = 0.0
+        self._sit_alone_since = None; self._move_recv_count = 0; self._move_skip_count = 0
+        self._move_error_count = 0; self._last_move_uci = None; self._last_move_time = 0.0
+        self.board.reset(); self.fixed_pawn_positions.clear()
+        self.board.is_playing = True; self.in_game = True; self._joining_table = False
         self.last_action_timestamp = time.time()
+        
         if self.engine and self.engine.alive():
             try:
                 with self.engine.engine_lock:
-                    self.engine.proc.stdin.write("ucinewgame\n")
-                    self.engine.proc.stdin.flush()
-            except Exception:
-                pass
+                    self.engine.proc.stdin.write("ucinewgame\n"); self.engine.proc.stdin.flush()
+            except Exception: pass
+            
         try:
             player_count = msg.read_byte()
-            for _ in range(player_count):
-                msg.read_byte(); msg.read_int()
+            for _ in range(player_count): msg.read_byte(); msg.read_int()
             piece_count = msg.read_byte()
             board_pieces = []
             for _ in range(piece_count):
                 raw_sid = msg.read_byte(); raw_face = msg.read_byte()
                 pos = msg.read_byte(); is_open = msg.read_byte()
-                board_pieces.append((self._decode_piece_id(raw_sid),
-                                     self._decode_piece_id(raw_face),
-                                     pos, is_open))
+                board_pieces.append((self._decode_piece_id(raw_sid), self._decode_piece_id(raw_face), pos, is_open))
             msg.read_byte(); mystery_count = msg.read_byte()
             for _ in range(mystery_count): msg.read_byte()
             msg.read_byte(); msg.read_byte()
-            first_turn_slot_id = msg.read_byte()
-            my_slot_id = msg.read_byte()
+            first_turn_slot_id = msg.read_byte(); my_slot_id = msg.read_byte()
             if my_slot_id < 0 or my_slot_id == 255:
-                my_slot_id = (self.board.my_slot_id
-                              if self.board.my_slot_id >= 0
-                              else first_turn_slot_id)
+                my_slot_id = (self.board.my_slot_id if self.board.my_slot_id >= 0 else first_turn_slot_id)
             self.board.set_my_slot(my_slot_id, first_turn_slot_id)
+            
             _built_fen = self._build_fen_from_pieces(board_pieces)
             _ok, _why = self.board.sanity_check_fen(_built_fen)
             if not _ok:
@@ -1305,60 +1037,27 @@ class JieqiCupBot:
                 else:
                     print(f"[FEN] ❌ Still bad ({_why2})")
                     self.board.flip = not self.board.flip
+                    
             self.board.set_base(_built_fen, 'w')
-
-            # ★ Set visible board from actual piece data
-            self.visible_board.set_from_pieces(board_pieces, self.board.flip)
-            self.visible_board.side_to_move = 'w'
-
-            # ★ NEW (sửa 1+2): lưu true_faces cho TẤT CẢ quân (kể cả úp)
             for sid, face, position, is_open in board_pieces:
-                if position < 0 or position >= 90:
-                    continue
-                if not is_open:
-                    self.board.dark_positions.add(position)
+                if not is_open and 0 <= position < 90: self.board.dark_positions.add(position)
                 piece_type = int(face[1]) if len(face) > 1 else 0
-                # Lưu face thật
-                if len(face) > 1:
-                    color = face[0]
-                    fen_char = TYPE_TO_FEN.get(piece_type, '?')
-                    if color == 'r':
-                        fen_char = fen_char.upper()
-                    self.board.set_true_face(position, fen_char)
-                # Đánh dấu tốt đã cố định
                 if piece_type == 7 and position not in STANDARD_PAWN_POSITIONS:
                     self.fixed_pawn_positions.add(position)
-
-            # ★ NEW: log tóm tắt true_faces
-            if self.board.true_faces:
-                n_dark_known = sum(1 for p in self.board.dark_positions
-                                   if p in self.board.true_faces)
-                print(f"[TRACK] 🧠 Đã giải mã {len(self.board.true_faces)} quân, "
-                      f"trong đó {n_dark_known} quân úp")
-                sample = list(self.board.true_faces.items())[:5]
-                sample_str = ", ".join(f"{p}:{c}" for p, c in sample)
-                print(f"[TRACK] 🔍 Sample true_faces: {sample_str} "
-                      f"(+{max(0, len(self.board.true_faces)-len(sample))} more)")
-
-            if self.fixed_pawn_positions:
-                print(f"[GAME] 🛡️ {len(self.fixed_pawn_positions)} locked pawns")
+            if self.fixed_pawn_positions: print(f"[GAME] 🛡️ {len(self.fixed_pawn_positions)} locked pawns")
             self.board.revealed_chars = []
             print(f"[FEN] 📋 {self.board.start_fen}")
             print(f"[START] BAG={self.board.bag_string()}")
-            print(f"[START] dark={len(self.board.dark_positions)} | "
-                  f"my_slot={my_slot_id} | first={first_turn_slot_id} | "
-                  f"flip={self.board.flip}")
+            print(f"[START] dark={len(self.board.dark_positions)} | my_slot={my_slot_id} | first={first_turn_slot_id} | flip={self.board.flip}")
+            
             if self.engine and self.engine.alive():
                 try:
                     with self.engine.engine_lock:
                         flip_str = "true" if self.board.flip else "false"
-                        self.engine.proc.stdin.write(f"setflip {flip_str}\n")
-                        self.engine.proc.stdin.flush()
-                except Exception:
-                    pass
+                        self.engine.proc.stdin.write(f"setflip {flip_str}\n"); self.engine.proc.stdin.flush()
+                except Exception: pass
         except Exception as e:
-            print(f"[START_MATCH ERROR] {e}")
-            traceback.print_exc()
+            print(f"[START_MATCH ERROR] {e}"); traceback.print_exc()
 
     def _build_fen_from_pieces(self, pieces):
         self.board.detect_flip(pieces)
@@ -1369,11 +1068,9 @@ class JieqiCupBot:
         for sid, face, position, is_open in pieces:
             if position < 0 or position >= 90: continue
             fen_row, col = self.board.pos_to_rc(position)
-            # ★ SEE ALL PIECES: use decoded face for ALL pieces (even hidden)
-            if len(face) > 1:
+            if is_open and len(face) > 1:
                 color = face[0]; piece_type = int(face[1])
-                type_to_fen = {1: 'k', 2: 'a', 3: 'b', 4: 'r',
-                               5: 'c', 6: 'n', 7: 'p'}
+                type_to_fen = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
                 fen_char = type_to_fen.get(piece_type, '?')
                 if color == 'r': fen_char = fen_char.upper()
             else:
@@ -1383,8 +1080,7 @@ class JieqiCupBot:
         for row in board:
             fen_row = ""; empty = 0
             for cell in row:
-                if cell == '.':
-                    empty += 1
+                if cell == '.': empty += 1
                 else:
                     if empty > 0: fen_row += str(empty); empty = 0
                     fen_row += cell
@@ -1407,101 +1103,54 @@ class JieqiCupBot:
             self._move_recv_count += 1
             try:
                 if not self.board.is_playing:
-                    self._move_skip_count += 1
-                    return
-                source_pos = msg.read_byte()
-                target_pos = msg.read_byte()
+                    self._move_skip_count += 1; return
+                source_pos = msg.read_byte(); target_pos = msg.read_byte()
                 if not (0 <= source_pos < 90 and 0 <= target_pos < 90):
-                    self._move_skip_count += 1
-                    return
+                    self._move_skip_count += 1; return
                 engine_move = self.board.pos_to_engine_move(source_pos, target_pos)
                 self.last_action_timestamp = time.time()
                 if not UCI_MOVE_RE.match(engine_move):
-                    self._move_error_count += 1
-                    return
+                    self._move_error_count += 1; return
                 rest = list(msg.data[msg.offset:]) if msg.offset < len(msg.data) else []
                 mover_dark = source_pos in self.board.dark_positions
                 is_flip_move = (source_pos == target_pos)
-                captured_dark = target_pos in self.board.dark_positions
-                captured_face_known = self.board.true_face_at(target_pos)
-
                 revealed_char = None
                 if (mover_dark or is_flip_move) and rest and rest[0] > 0 and len(rest) >= 3:
                     cand = self._sid_to_fen_char(rest[2])
-                    if cand and cand not in ('k', 'K'):
-                        revealed_char = cand
-
-                # ★ NEW (sửa 2): xử lý quân úp BỊ ĂN
-                if captured_dark and captured_face_known:
-                    server_reveal = (self._sid_to_fen_char(rest[2])
-                                     if rest and len(rest) >= 3 and rest[0] > 0 else None)
-                    print(f"[CAPTURE] 🎯 Quân úp ở {target_pos} bị ăn, "
-                          f"thực tế là '{captured_face_known}' "
-                          f"(server_reveal={server_reveal or 'None'})", flush=True)
-                    if server_reveal and server_reveal != captured_face_known:
-                        print(f"[CAPTURE] ⚠️ Mismatch: server='{server_reveal}' "
-                              f"vs true='{captured_face_known}'", flush=True)
-                    # Nếu server KHÔNG gửi reveal → tự append để BAG đúng
-                    if not revealed_char:
-                        self.board.revealed_chars.append(captured_face_known)
-
+                    if cand and cand not in ('k', 'K'): revealed_char = cand
                 self.board.dark_positions.discard(source_pos)
                 self.board.dark_positions.discard(target_pos)
-
-                # ★ NEW (sửa 2): cập nhật true_faces
-                self.board.move_true_face(source_pos, target_pos)
-
                 full_uci = engine_move + (revealed_char or "")
                 now = time.time()
-                if (self._last_move_uci == full_uci
-                        and (now - self._last_move_time) < MOVE_DEDUP_WINDOW):
-                    self._move_skip_count += 1
-                    return
+                if (self._last_move_uci == full_uci and (now - self._last_move_time) < MOVE_DEDUP_WINDOW):
+                    self._move_skip_count += 1; return
                 self.board.record_move(engine_move, revealed_char)
-                # ★ Update visible board
-                src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
-                self.visible_board.apply_move(src_pos, tgt_pos)
-                self.visible_board.flip_side()
-                self._last_move_uci = full_uci
-                self._last_move_time = now
-                self._played_this_turn = False
-                print(f"[MOVE] #{self._move_recv_count} {engine_move} -> "
-                      f"'{full_uci}' | uci={len(self.board.uci_moves)} "
-                      f"revealed={len(self.board.revealed_chars)} "
-                      f"| BAG={self.board.bag_string()}", flush=True)
+                self._last_move_uci = full_uci; self._last_move_time = now; self._played_this_turn = False
+                print(f"[MOVE] #{self._move_recv_count} {engine_move} -> '{full_uci}' | uci={len(self.board.uci_moves)} "
+                      f"revealed={len(self.board.revealed_chars)} | BAG={self.board.bag_string()}", flush=True)
             except Exception as e:
-                self._move_error_count += 1
-                print(f"[MOVE ERROR] err={e}", flush=True)
-                traceback.print_exc()
+                self._move_error_count += 1; print(f"[MOVE ERROR] err={e}", flush=True); traceback.print_exc()
 
     def _handle_play_response(self, msg):
-        status = msg.read_byte()
-        err_text = ""
+        status = msg.read_byte(); err_text = ""
         try:
             if msg.rem() >= 2: err_text = msg.read_string()
         except Exception: pass
         print(f"[PLAY-RESP] status={status} err={err_text!r}", flush=True)
         if status != 0:
-            self._play_reject_count += 1
-            self.board.is_my_turn = True
-            self._played_this_turn = False
+            self._play_reject_count += 1; self.board.is_my_turn = True; self._played_this_turn = False
             print(f"[PLAY] ⚠️ Reject #{self._play_reject_count} err={err_text!r}", flush=True)
-            if self._last_sent_move:
-                self._rejected_moves.add(self._last_sent_move)
+            if self._last_sent_move: self._rejected_moves.add(self._last_sent_move)
             if self._play_reject_count <= 3:
-                threading.Thread(target=lambda: (time.sleep(0.5), self._make_auto_move()),
-                                 daemon=True).start()
+                threading.Thread(target=lambda: (time.sleep(0.5), self._make_auto_move()), daemon=True).start()
         else:
-            self._play_reject_count = 0
-            self._rejected_moves.clear()
+            self._play_reject_count = 0; self._rejected_moves.clear()
 
     def _handle_set_turn(self, msg):
         try:
             slot_id = msg.read_byte()
-            try:
-                turn_timeout = msg.read_short()
-            except Exception:
-                turn_timeout = 0
+            try: turn_timeout = msg.read_short()
+            except Exception: turn_timeout = 0
             if slot_id == -2 or slot_id == -1 or not self.board.is_playing: return
             self.turn_timeout = turn_timeout
             was_my_turn = self.board.is_my_turn
@@ -1513,24 +1162,19 @@ class JieqiCupBot:
             self._played_this_turn = False
             self._moves_len_at_turn_start = len(self.board.uci_moves)
             if not was_my_turn:
-                print(f"[TURN] My turn | uci={len(self.board.uci_moves)} "
-                      f"| timeout={turn_timeout}s", flush=True)
+                print(f"[TURN] My turn | uci={len(self.board.uci_moves)} | timeout={turn_timeout}s", flush=True)
             threading.Thread(target=self._make_auto_move, daemon=True).start()
         except Exception as e:
-            print(f"[SET_TURN ERROR] {e}")
-            traceback.print_exc()
+            print(f"[SET_TURN ERROR] {e}"); traceback.print_exc()
 
     def _handle_kick_response(self, msg):
-        try:
-            status = msg.read_byte(); content = msg.read_string()
+        try: status = msg.read_byte(); content = msg.read_string()
         except Exception: status, content = None, ""
         if self._pending_kick_id is not None:
             pid = self._pending_kick_id; self._pending_kick_id = None
-            print(f"[KICK] {'✅' if status == 0 else '❌'} pid={pid}")
-            return
+            print(f"[KICK] {'✅' if status == 0 else '❌'} pid={pid}"); return
         print(f"[KICK] Kicked: {content}")
-        self.in_game = False; self._joining_table = False
-        self._table_path = None; self.board.reset()
+        self.in_game = False; self._joining_table = False; self._table_path = None; self.board.reset()
 
     def _handle_gameover(self, msg):
         my_result, results = None, {}
@@ -1540,106 +1184,87 @@ class JieqiCupBot:
                 sid = msg.read_byte(); res = msg.read_byte(); msg.read_long()
                 results[sid] = res
                 if sid == self.board.my_slot_id: my_result = res
-        except Exception:
-            results = {}
-
+        except Exception: results = {}
+        
         bot_won = my_result in (1, 11)
         bot_lost = my_result in (2, 4, 12)
-        if bot_won:
-            print("[GAME] 🏁 WIN")
-        elif bot_lost:
-            print("[GAME] 🏁 LOSE")
-        elif my_result is None:
-            print("[GAME] 🏁 END")
-        else:
-            print("[GAME] 🏁 DRAW")
-
+        if bot_won: print("[GAME] 🏁 WIN")
+        elif bot_lost: print("[GAME] 🏁 LOSE")
+        elif my_result is None: print("[GAME] 🏁 END")
+        else: print("[GAME] 🏁 DRAW")
+        
         print(f"[SUMMARY] #{self._game_seq} | uci={len(self.board.uci_moves)} | "
-              f"revealed={len(self.board.revealed_chars)} | "
-              f"recv={self._move_recv_count} skip={self._move_skip_count} "
-              f"err={self._move_error_count} reject={self._play_reject_count}",
-              flush=True)
-
-        self.board.is_playing = False
-        self.board.is_my_turn = False
-        self.fixed_pawn_positions.clear()
-        self.board.reset()
-        self.in_game = True
-        self._joining_table = False
-        self.last_action_timestamp = time.time()
-        self._thinking = False
-        self._played_this_turn = False
-        self._turn_started_at = 0.0
-        self._turn_deadline = 0.0
-
+              f"revealed={len(self.board.revealed_chars)} | recv={self._move_recv_count} "
+              f"skip={self._move_skip_count} err={self._move_error_count} reject={self._play_reject_count}", flush=True)
+              
+        self.board.is_playing = False; self.board.is_my_turn = False
+        self.fixed_pawn_positions.clear(); self.board.reset()
+        self.in_game = True; self._joining_table = False
+        self.last_action_timestamp = time.time(); self._thinking = False
+        self._played_this_turn = False; self._turn_started_at = 0.0; self._turn_deadline = 0.0
+        
         if self.engine and self.engine.alive():
             try:
                 with self.engine.engine_lock:
-                    self.engine.proc.stdin.write("ucinewgame\n")
-                    self.engine.proc.stdin.flush()
-            except Exception:
-                pass
-
+                    self.engine.proc.stdin.write("ucinewgame\n"); self.engine.proc.stdin.flush()
+            except Exception: pass
+            
+        # ★ SỬA LỖI: LUÔN Ở LẠI BÀN, KHÔNG KICK, KHÔNG RỜI BÀN KHI THUA
         def after_gameover():
             print("[GAME] 🔄 Ở lại bàn, sẵn sàng cho ván mới (không kick / không rời)...")
             time.sleep(3.0)
             if self.connected and not self.board.is_playing:
                 self.send_ready(1)
-
+                
         threading.Thread(target=after_gameover, daemon=True).start()
 
     def _make_auto_move(self):
         if not self.board.is_my_turn or not self.board.is_playing: return
         if self._thinking: return
         self._thinking = True
-        try:
-            self._do_auto_move()
+        try: self._do_auto_move()
         except Exception as e:
-            print(f"[MOVE-THREAD] Crash: {e}")
-            traceback.print_exc()
-        finally:
-            self._thinking = False
+            print(f"[MOVE-THREAD] Crash: {e}"); traceback.print_exc()
+        finally: self._thinking = False
 
     def _do_auto_move(self):
         if not self.engine:
-            print("[ENGINE] ❌ Không có engine")
-            return
+            print("[ENGINE] ❌ Không có engine"); return
         if not self.engine.alive():
             print("[ENGINE] ❌ Engine chết giữa ván — thử restart...", flush=True)
             if not self.engine.restart():
-                print("[ENGINE] ❌ Restart thất bại — bỏ lượt", flush=True)
-                return
+                print("[ENGINE] ❌ Restart thất bại — bỏ lượt", flush=True); return
             print("[ENGINE] ✅ Restart OK — đi tiếp", flush=True)
+            
         now = time.time()
         deadline = self._turn_deadline if self._turn_deadline > 0 else (now + MOVE_DEADLINE_SECONDS)
         remain = deadline - now
         if remain < 4.0:
-            print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
-            return
+            print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt"); return
+            
         movetime_ms = 3000
         fen, moves = self.board.get_current_fen()
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
-        print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
-              flush=True)
+        print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s", flush=True)
+        
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
                 raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
             if not raw:
-                print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True)
-                return
+                print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True); return
+                
         parts = raw.split()
         if len(parts) < 2: return
         best_move = parts[1]
-        print(f"[ENGINE-OUT] bestmove: {best_move} [d{self.engine._last_depth} {self.engine._last_score}]",
-              flush=True)
+        print(f"[ENGINE-OUT] bestmove: {best_move} [d{self.engine._last_depth} {self.engine._last_score}]", flush=True)
+        
         if best_move in self._rejected_moves:
-            print(f"[ENGINE] Rejected move {best_move}, skip", flush=True)
-            return
+            print(f"[ENGINE] Rejected move {best_move}, skip", flush=True); return
         if best_move in ("(none)", "0000"):
-            self.board.is_my_turn = False
-            return
+            self.board.is_my_turn = False; return
+            
         try:
             source_pos, target_pos = self.board.engine_move_to_pos(best_move)
             _turn_start = self._turn_started_at if self._turn_started_at > 0 else time.time()
@@ -1647,13 +1272,11 @@ class JieqiCupBot:
             if _remain_min > 0: time.sleep(_remain_min)
             if not (self.board.is_my_turn and self.board.is_playing): return
             if self._played_this_turn: return
-            print(f"-> Đi: {best_move} (pos {source_pos}->{target_pos}) "
-                  f"| uci={len(self.board.uci_moves)}", flush=True)
+            print(f"-> Đi: {best_move} (pos {source_pos}->{target_pos}) | uci={len(self.board.uci_moves)}", flush=True)
             self._last_sent_move = best_move
             self.send_play(source_pos, target_pos)
         except Exception as e:
-            print(f"[BOT ERROR] {e}")
-            traceback.print_exc()
+            print(f"[BOT ERROR] {e}"); traceback.print_exc()
 
     def _decode_piece_id(self, encoded_id):
         color = 'r'
@@ -1668,7 +1291,7 @@ class JieqiCupBot:
         threading.Thread(target=loop, daemon=True).start()
 
     def run(self):
-        print("[BOT] Khởi chạy cờ úp Jieqi v1.2 (stay-on-lose + true_faces)...")
+        print("[BOT] Khởi chạy cờ úp Jieqi v1.1 (stay-on-lose + correct FEN)...")
         while True:
             try:
                 now_ts = time.time()
@@ -1695,22 +1318,17 @@ class JieqiCupBot:
                         time.sleep(delay)
                     if not fetch_session_info():
                         time.sleep(5); continue
-                    self.logged_in = False; self.in_game = False
-                    self._joining_table = False
-                    self._bet_amts_loaded = False
-                    self._resolved_bet_id = None
+                    self.logged_in = False; self.in_game = False; self._joining_table = False
+                    self._bet_amts_loaded = False; self._resolved_bet_id = None
                     self.bet_amts = []; self.fixed_pawn_positions = set()
-                    self._thinking = False; self._played_this_turn = False
-                    self.board.reset()
+                    self._thinking = False; self._played_this_turn = False; self.board.reset()
                     if not self.connect():
                         time.sleep(5); continue
                     self.start_keep_alive()
                     time.sleep(2)
 
-                if (self.board.is_playing and self.board.is_my_turn
-                        and self._turn_deadline > 0
-                        and time.time() > self._turn_deadline - 4.0
-                        and not self._played_this_turn):
+                if (self.board.is_playing and self.board.is_my_turn and self._turn_deadline > 0
+                        and time.time() > self._turn_deadline - 4.0 and not self._played_this_turn):
                     if not self._thinking:
                         print(f"[DEADLINE] Còn {int(self._turn_deadline - time.time())}s")
                         threading.Thread(target=self._make_auto_move, daemon=True).start()
@@ -1721,8 +1339,7 @@ class JieqiCupBot:
                     if self.in_game and not self._joining_table:
                         opp_id = self.opponent_player_id()
                         if opp_id is None:
-                            if self._sit_alone_since is None:
-                                self._sit_alone_since = time.time()
+                            if self._sit_alone_since is None: self._sit_alone_since = time.time()
                             else:
                                 elapsed = time.time() - self._sit_alone_since
                                 if elapsed >= SIT_ALONE_TIMEOUT:
@@ -1731,23 +1348,18 @@ class JieqiCupBot:
                         else:
                             self._sit_alone_since = None
 
-                if (self._enter_fail_at and self.in_game
-                        and not self.board.is_playing
+                if (self._enter_fail_at and self.in_game and not self.board.is_playing
                         and time.time() - self._enter_fail_at > 60):
                     print("[TABLE] 60s không vào ván -> bỏ bàn cũ")
-                    self._enter_fail_at = 0.0
-                    self.leave_table()
+                    self._enter_fail_at = 0.0; self.leave_table()
 
-                if (self.connected and self.logged_in and not self.in_game
-                        and not self._joining_table):
+                if (self.connected and self.logged_in and not self.in_game and not self._joining_table):
                     now = time.time()
                     if now - self._last_quick_play_time >= self._QUICK_PLAY_INTERVAL:
                         if not self._bet_amts_loaded:
                             self.send_list_bet_amt()
                         elif BOT_USE_CREATE_TABLE:
-                            bid = (self._resolved_bet_id
-                                   if self._resolved_bet_id is not None
-                                   else self.resolve_bet_amt_id())
+                            bid = (self._resolved_bet_id if self._resolved_bet_id is not None else self.resolve_bet_amt_id())
                             print(f"[CREATE] 🪑 Tạo bàn {BOT_BET_XU} xu (bet_id={bid})")
                             self.send_create_table(bet_amt_id=bid)
                         else:
@@ -1765,23 +1377,17 @@ class JieqiCupBot:
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                print(f"[RUN ERROR] {e}")
-                traceback.print_exc()
-                time.sleep(5)
+                print(f"[RUN ERROR] {e}"); traceback.print_exc(); time.sleep(5)
 
     def cleanup(self):
         if self.engine:
             try:
                 if self.engine.proc:
-                    self.engine.proc.stdin.write("quit\n")
-                    self.engine.proc.stdin.flush()
-                    self.engine.proc.wait(timeout=2)
-            except Exception:
-                pass
+                    self.engine.proc.stdin.write("quit\n"); self.engine.proc.stdin.flush(); self.engine.proc.wait(timeout=2)
+            except Exception: pass
         if self.ws:
             try: self.ws.close()
             except: pass
-
 
 def acquire_single_instance_lock():
     try:
@@ -1791,19 +1397,16 @@ def acquire_single_instance_lock():
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            print(f"[BOT] ❌ Đã có bot khác chạy tài khoản {USER}")
-            sys.exit(1)
+            print(f"[BOT] ❌ Đã có bot khác chạy tài khoản {USER}"); sys.exit(1)
         f.write(str(os.getpid())); f.flush()
         atexit.register(lambda: (fcntl.flock(f, fcntl.LOCK_UN), f.close()))
         return f
     except ImportError:
         return None
 
-
 if __name__ == "__main__":
     _lock = acquire_single_instance_lock()
     bot = JieqiCupBot()
-
     def signal_handler(sig, frame):
         bot.cleanup(); sys.exit(0)
     signal.signal(signal.SIGINT, signal_handler)
