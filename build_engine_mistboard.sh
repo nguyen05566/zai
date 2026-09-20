@@ -13,25 +13,6 @@ make -C "$WORK/src" -j"$(nproc)" ARCH=x86-64-sse41-popcnt build
 cp "$WORK/src/PikaJieQi" "$ROOT/pikajieqi-mistboard"
 chmod +x "$ROOT/pikajieqi-mistboard"
 
-# Use the same evaluation net as the original bot, but keep the engine binary
-# separate so cup_bot_jieqi.py remains untouched.
-if [ ! -s "$ROOT/pikafish.nnue" ]; then
-  TMP_ARCHIVE="${TMPDIR:-/tmp}/pikafish.nnue.7z"
-  TMP_EXTRACT="${TMPDIR:-/tmp}/pikafish-nnue"
-  curl -fsSL "https://github.com/official-pikafish/Pikafish/releases/download/Pikafish-2026-09-06/Pikafish.2026-09-06.7z" -o "$TMP_ARCHIVE"
-  rm -rf "$TMP_EXTRACT" && mkdir -p "$TMP_EXTRACT"
-  # The release archive format has varied; do not let an unsuccessful first
-  # extractor abort the workflow. Try both tools, then locate the net.
-  unrar x -y "$TMP_ARCHIVE" "$TMP_EXTRACT/" >/dev/null 2>&1 || true
-  if [ ! -s "$TMP_EXTRACT/pikafish.nnue" ]; then
-    7z x -y "$TMP_ARCHIVE" "-o$TMP_EXTRACT" >/dev/null 2>&1 || true
-  fi
-  NNUE_FOUND=$(find "$TMP_EXTRACT" -type f -name 'pikafish.nnue' -print -quit)
-  if [ -z "$NNUE_FOUND" ]; then
-    echo "Could not extract pikafish.nnue from $TMP_ARCHIVE" >&2
-    exit 1
-  fi
-  cp "$NNUE_FOUND" "$ROOT/pikafish.nnue"
-fi
-
+# Mistboard's pinned `jieqi_old` build is classical and does not require NNUE.
+# Keep this workflow independent of the large Pikafish release archive.
 echo "Built $ROOT/pikajieqi-mistboard using ref $REF"

@@ -683,7 +683,10 @@ class MistboardJieqiEngine:
                 _threads = max(1, min(2, (os.cpu_count() or 2) - 1))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
                 self.proc.stdin.write("setoption name Hash value 128\n")
-                self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
+                # Mistboard's pinned classical jieqi_old build does not require
+                # an NNUE file. Use it only when the optional net is present.
+                if os.path.isfile(nnue_path):
+                    self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
                 self.proc.stdin.write("isready\n")
                 self.proc.stdin.flush()
