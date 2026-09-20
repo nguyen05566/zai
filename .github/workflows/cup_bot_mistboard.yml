@@ -23,7 +23,7 @@ jobs:
     - name: Install build dependencies
       run: |
         sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential curl unrar
+        sudo apt-get install -y -qq build-essential curl unrar p7zip-full
 
     - name: Install Python dependencies
       run: pip install websocket-client requests
@@ -34,12 +34,3 @@ jobs:
     - name: Verify engine
       run: |
         echo "uci" | ./pikajieqi-mistboard | head -3
-        ls -la pikajieqi-mistboard
-
-    - name: Run Mistboard engine bot
-      env:
-        CARO_USER19: ${{ secrets.CARO_USER19 }}
-        CARO_PASSWD19: ${{ secrets.CARO_PASSWD19 }}
-        MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
-      run: python3 -u cup_bot_mistboard.py
-      timeout-minutes: 340
