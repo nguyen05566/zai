@@ -515,6 +515,73 @@ class XiangqiBoardTracker:
             return False, f"tướng sai chiều (K hàng {K_row}, k hàng {k_row})"
         return True, "ok"
 
+class VisibleBoard:
+    """Tracks actual piece positions for 'see-all' mode.
+    
+    Maintains a 90-cell board with actual piece types (from raw_face).
+    Used to generate standard xiangqi FEN for the engine.
+    """
+    TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
+    
+    def __init__(self):
+        self.cells = ['.'] * 90  # 90 positions, '.' = empty
+        self.side_to_move = 'w'
+        
+    def reset(self):
+        self.cells = ['.'] * 90
+        self.side_to_move = 'w'
+    
+    def set_from_pieces(self, pieces, flip):
+        """Set board from START_MATCH pieces list.
+        pieces: [(sid, face, position, is_open), ...]
+        flip: board flip state (from XiangqiBoardTracker)
+        """
+        self.cells = ['.'] * 90
+        for sid, face, position, is_open in pieces:
+            if position < 0 or position >= 90:
+                continue
+            if len(face) >= 2:
+                color = face[0]  # 'r' or 'b'
+                piece_type = int(face[1])
+                fen_char = self.TYPE_TO_FEN.get(piece_type, '?')
+                if color == 'r':
+                    fen_char = fen_char.upper()
+                self.cells[position] = fen_char
+    
+    def apply_move(self, source_pos, target_pos):
+        """Move a piece from source to target."""
+        if 0 <= source_pos < 90 and 0 <= target_pos < 90:
+            self.cells[target_pos] = self.cells[source_pos]
+            self.cells[source_pos] = '.'
+    
+    def flip_side(self):
+        self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
+    
+    def to_fen(self, flip=False):
+        """Convert to FEN string.
+        Server positions: pos = row * 9 + col (row 0 = RED bottom, row 9 = BLACK top)
+        FEN format: row 9 first (top), row 0 last (bottom)
+        """
+        rows = []
+        for board_row in range(9, -1, -1):  # row 9 → row 0
+            fen_str = ""
+            empty = 0
+            for col in range(9):
+                pos = board_row * 9 + col
+                piece = self.cells[pos] if 0 <= pos < 90 else '.'
+                if piece == '.':
+                    empty += 1
+                else:
+                    if empty > 0:
+                        fen_str += str(empty)
+                        empty = 0
+                    fen_str += piece
+            if empty > 0:
+                fen_str += str(empty)
+            rows.append(fen_str)
+        return '/'.join(rows) + ' ' + self.side_to_move + ' - - 0 1'
+
+
 class JieqiEngine:
     def __init__(self):
         self.proc = None
@@ -537,6 +604,7 @@ class JieqiEngine:
             self.engine = False
             return
         print(f"[ENGINE] 🎯 pikajieqi-native = {self.binary_path}")
+        self.visible_board = VisibleBoard()
         self._init_engine()
         self.engine = self.proc is not None
 
@@ -673,26 +741,10 @@ class JieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # ★ SEND STANDARD FEN (no BAG, no X/x — all pieces visible)
-            # Strip BAG if present in FEN
-            fen_parts = fen.split()
-            fen_board = fen_parts[0] if fen_parts else fen
-            fen_side = 'w'
-            for p in fen_parts[1:]:
-                if p in ('w', 'b'):
-                    fen_side = p
-                    break
-            clean_fen = f"{fen_board} {fen_side} - - 0 1"
-            
-            # ★ STRIP reveal suffixes from moves (not needed — all pieces known)
-            clean_moves = []
-            for m in moves:
-                if len(m) >= 4:
-                    clean_moves.append(m[:4])  # Take only first 4 chars (e.g., "c3c4" from "c3c4N")
-            
+            # ★ USE VISIBLE BOARD: send current position as standard FEN
+            # No moves list needed — engine gets exact current position
+            clean_fen = self.visible_board.to_fen(self.board.flip)
             cmd = f"position fen {clean_fen}"
-            if clean_moves:
-                cmd += " moves " + " ".join(clean_moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -1230,6 +1282,10 @@ class JieqiCupBot:
                     print(f"[FEN] ❌ Still bad ({_why2})")
                     self.board.flip = not self.board.flip
             self.board.set_base(_built_fen, 'w')
+            
+            # ★ Set visible board from actual piece data
+            self.visible_board.set_from_pieces(board_pieces, self.board.flip)
+            self.visible_board.side_to_move = 'w'
             for sid, face, position, is_open in board_pieces:
                 if not is_open and 0 <= position < 90:
                     self.board.dark_positions.add(position)
@@ -1333,6 +1389,10 @@ class JieqiCupBot:
                     self._move_skip_count += 1
                     return
                 self.board.record_move(engine_move, revealed_char)
+                # ★ Update visible board
+                src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
+                self.visible_board.apply_move(src_pos, tgt_pos)
+                self.visible_board.flip_side()
                 self._last_move_uci = full_uci
                 self._last_move_time = now
                 self._played_this_turn = False
