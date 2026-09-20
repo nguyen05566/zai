@@ -1,8 +1,9 @@
 """
 cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (pikajieqi-native)
-SỬA LỖI CỐT LÕI: Gửi chính xác FEN (bao gồm X/x và BAG) thay vì 'startpos' 
-                 để engine nhận diện và tận dụng được quân úp thật sự.
-HÀNH VI: KHÔNG kick, KHÔNG rời bàn khi thua. Luôn ở lại và ready ván mới.
+SỬA LỖI:
+1. Flip logic: Dựa vào slot ID thay vì K/k position (tránh điều khiển quân sai màu)
+2. Gửi FEN đầy đủ: Dùng 'position fen {fen}' thay vì 'position startpos'
+3. KHÔNG kick, KHÔNG rời bàn khi thua - luôn ở lại và ready ván mới
 """
 import struct
 import threading
@@ -17,6 +18,7 @@ import tempfile
 import json
 import random
 import traceback
+import shutil
 import urllib.request, urllib.parse, http.cookiejar
 
 # ============================================================================
@@ -397,7 +399,6 @@ class XiangqiBoardTracker:
         return "".join(f"{k}{bag[k]}" for k in BAG_ORDER)
 
     def get_current_fen(self):
-        # ★ Trả về FEN đầy đủ: Bàn cờ (có X/x) + Túi quân (BAG) + Lượt đi
         fen = f"{self.start_fen} {self.bag_string()} {self.start_side} - - 0 1"
         moves = [m for m in self.uci_moves if UCI_MOVE_WITH_SUFFIX_RE.match(m)]
         return fen, moves
@@ -425,35 +426,8 @@ class XiangqiBoardTracker:
         self.is_red = (self.my_slot_id == self.first_turn_slot_id)
 
     def detect_flip(self, pieces):
-        red_rows, black_rows, red_king_row, black_king_row = [], [], None, None
-        for sid, face, position, is_open in pieces:
-            if position is None or position < 0 or position >= 90: continue
-            row = position // 9
-            color = face[0] if face else (sid[0] if sid else 'r')
-            ptype = int(face[1]) if len(face) > 1 and str(face[1]).isdigit() else 0
-            if ptype == 0 and len(sid) > 1 and str(sid[1]).isdigit(): ptype = int(sid[1])
-            if color == 'r':
-                red_rows.append(row)
-                if ptype == 1: red_king_row = row
-            else:
-                black_rows.append(row)
-                if ptype == 1: black_king_row = row
-        
-        if red_king_row is not None and black_king_row is not None:
-            self.flip = red_king_row < black_king_row
-            self.flip_known = True
-        elif red_king_row is not None:
-            self.flip = red_king_row <= 4
-            self.flip_known = True
-        elif black_king_row is not None:
-            self.flip = black_king_row >= 5
-            self.flip_known = True
-        elif red_rows and black_rows:
-            self.flip = (sum(red_rows) / len(red_rows)) < (sum(black_rows) / len(black_rows))
-            self.flip_known = True
-        else:
-            self.flip = bool(self.is_red)
-            self.flip_known = False
+        """DEPRECATED: Không dùng nữa vì dựa vào K/k position không đáng tin cậy.
+        Flip giờ được set dựa vào slot ID trong _handle_start_match."""
         return self.flip
 
     def sanity_check_fen(self, board_fen):
@@ -597,9 +571,8 @@ class JieqiEngine:
     def get_best_move(self, fen, moves, movetime_ms=2000):
         """
         ★ SỬA LỖI CỐT LÕI: 
-        Thay vì dùng 'position startpos' (khiến engine bỏ qua quân úp X/x), 
-        ta dùng 'position fen {fen}' để truyền chính xác trạng thái bàn cờ 
-        (bao gồm X/x) và túi quân (BAG) mà Python đã tính toán.
+        Dùng 'position fen {fen}' thay vì 'position startpos' để truyền chính xác 
+        trạng thái bàn cờ (bao gồm X/x) và túi quân (BAG).
         """
         if not self.alive():
             if not self.restart(): return None
@@ -1022,23 +995,16 @@ class JieqiCupBot:
             first_turn_slot_id = msg.read_byte(); my_slot_id = msg.read_byte()
             if my_slot_id < 0 or my_slot_id == 255:
                 my_slot_id = (self.board.my_slot_id if self.board.my_slot_id >= 0 else first_turn_slot_id)
-            self.board.set_my_slot(my_slot_id, first_turn_slot_id)
             
-            _built_fen = self._build_fen_from_pieces(board_pieces)
-            _ok, _why = self.board.sanity_check_fen(_built_fen)
-            if not _ok:
-                print(f"[FEN] ⚠️ Bad orientation ({_why}) -> flip")
-                self.board.flip = not self.board.flip
-                _rebuilt = self._rebuild_fen_with_current_flip(board_pieces)
-                _ok2, _why2 = self.board.sanity_check_fen(_rebuilt)
-                if _ok2:
-                    _built_fen = _rebuilt
-                    print(f"[FEN] ✅ flip={self.board.flip}")
-                else:
-                    print(f"[FEN] ❌ Still bad ({_why2})")
-                    self.board.flip = not self.board.flip
-                    
+            # ★ FIX: Set flip dựa vào slot ID, KHÔNG dựa vào K/k position
+            self.board.set_my_slot(my_slot_id, first_turn_slot_id)
+            self.board.flip = (my_slot_id != first_turn_slot_id)  # my_slot != first → BLACK → flip
+            self.board.flip_known = True
+            
+            # Build FEN trực tiếp với flip đã set
+            _built_fen = self._rebuild_fen_with_current_flip(board_pieces)
             self.board.set_base(_built_fen, 'w')
+            
             for sid, face, position, is_open in board_pieces:
                 if not is_open and 0 <= position < 90: self.board.dark_positions.add(position)
                 piece_type = int(face[1]) if len(face) > 1 else 0
@@ -1058,10 +1024,6 @@ class JieqiCupBot:
                 except Exception: pass
         except Exception as e:
             print(f"[START_MATCH ERROR] {e}"); traceback.print_exc()
-
-    def _build_fen_from_pieces(self, pieces):
-        self.board.detect_flip(pieces)
-        return self._rebuild_fen_with_current_flip(pieces)
 
     def _rebuild_fen_with_current_flip(self, pieces):
         board = [['.' for _ in range(9)] for _ in range(10)]
@@ -1291,7 +1253,7 @@ class JieqiCupBot:
         threading.Thread(target=loop, daemon=True).start()
 
     def run(self):
-        print("[BOT] Khởi chạy cờ úp Jieqi v1.1 (stay-on-lose + correct FEN)...")
+        print("[BOT] Khởi chạy cờ úp Jieqi v1.2 (correct flip + correct FEN + stay-on-lose)...")
         while True:
             try:
                 now_ts = time.time()
