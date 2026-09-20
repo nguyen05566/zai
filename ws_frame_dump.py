@@ -99,6 +99,31 @@ def parse_start_match(data: bytes) -> dict[str, Any]:
     }
 
 
+def parse_move(data: bytes) -> dict[str, Any]:
+    """Parse a MOVE event into a reusable, JSON-safe event."""
+    cmd, off = command_id(data)
+    if cmd != "MOVE":
+        raise ValueError(f"not MOVE: {cmd!r}")
+    source, off = u8(data, off)
+    target, off = u8(data, off)
+    return {
+        "command": "MOVE",
+        "source": source,
+        "target": target,
+        "payload_hex": data[off:].hex(),
+    }
+
+
+def decode_frame(data: bytes) -> dict[str, Any]:
+    """Decode supported game events once for both bot logic and logging."""
+    cmd, _ = command_id(data)
+    if cmd == "START_MATCH":
+        return parse_start_match(data)
+    if cmd == "MOVE":
+        return parse_move(data)
+    return {"command": cmd, "length": len(data), "hex_prefix": data[:256].hex()}
+
+
 def _open_log(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     # Do not let a shared-readable log expose game frames.
@@ -135,11 +160,14 @@ def log_incoming_frame(data: bytes, directory: str = "ws_capture") -> None:
     with _open_log(out / "frames.jsonl") as f:
         f.write(json.dumps(meta, ensure_ascii=False) + "\n")
 
-    if cmd == "START_MATCH":
+    if cmd in ("START_MATCH", "MOVE"):
         try:
-            parsed = parse_start_match(data)
-            with _open_log(out / "start_match.jsonl") as f:
+            parsed = decode_frame(data)
+            log_name = "start_match.jsonl" if cmd == "START_MATCH" else "events.jsonl"
+            with _open_log(out / log_name) as f:
                 f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
+            if cmd == "MOVE":
+                return
             hidden = [p for p in parsed["pieces"] if not p["is_open"]]
             print(f"[WS-CAPTURE] START_MATCH pieces={len(parsed['pieces'])} hidden={len(hidden)}")
             for p in hidden:
