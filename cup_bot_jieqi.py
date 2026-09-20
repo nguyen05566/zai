@@ -604,7 +604,7 @@ class JieqiEngine:
             self.engine = False
             return
         print(f"[ENGINE] 🎯 pikajieqi-native = {self.binary_path}")
-        self.visible_board = VisibleBoard()
+
         self._init_engine()
         self.engine = self.proc is not None
 
@@ -791,6 +791,7 @@ class JieqiCupBot:
     def __init__(self):
         self.conn = Conn()
         self.board = XiangqiBoardTracker()
+        self.visible_board = VisibleBoard()
         self.engine = None
         self.ws = None
         self.connected = False
