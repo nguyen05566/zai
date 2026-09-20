@@ -683,6 +683,7 @@ class JieqiEngine:
                 self.proc.stdin.write("setoption name Hash value 128\n")
                 self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
+                self.proc.stdin.write("setoption name Ponder value false\n")
                 self.proc.stdin.write("isready\n")
                 self.proc.stdin.flush()
             except Exception as e:
@@ -1567,6 +1568,7 @@ class JieqiCupBot:
         best_move = parts[1]
         print(f"[ENGINE-OUT] bestmove: {best_move} [d{self.engine._last_depth} {self.engine._last_score}]",
               flush=True)
+        best_move = self._prioritize_reveal(best_move)
         if best_move in self._rejected_moves:
             print(f"[ENGINE] Rejected move {best_move}, skip", flush=True)
             return
@@ -1590,6 +1592,39 @@ class JieqiCupBot:
         except Exception as e:
             print(f"[BOT ERROR] {e}")
             traceback.print_exc()
+
+    def _prioritize_reveal(self, engine_best_move):
+        """Prioritize revealing strong dark pieces (Rook/Cannon/Knight) in early game."""
+        if len(self.board.uci_moves) > 10:
+            return engine_best_move
+        try:
+            src_pos, tgt_pos = self.board.engine_move_to_pos(engine_best_move)
+        except:
+            return engine_best_move
+        is_dark_move = src_pos in self.board.dark_positions
+        if is_dark_move:
+            piece = self.visible_board.cells[src_pos] if 0 <= src_pos < 90 else '.'
+            if piece in ('R', 'C', 'N', 'r', 'c', 'n'):
+                return engine_best_move
+        my_color = 'r' if self.board.is_red else 'b'
+        priority_chars = ['R', 'C', 'N'] if my_color == 'r' else ['r', 'c', 'n']
+        for target_char in priority_chars:
+            for pos in sorted(self.board.dark_positions):
+                if 0 <= pos < 90:
+                    piece = self.visible_board.cells[pos]
+                    if piece == target_char:
+                        my_row = pos // 9
+                        my_col = pos % 9
+                        target_row = my_row + 2 if my_color == 'r' else my_row - 2
+                        if 0 <= target_row <= 9:
+                            target_pos = target_row * 9 + my_col
+                            target_piece = self.visible_board.cells[target_pos] if 0 <= target_pos < 90 else '.'
+                            if target_piece == '.' or target_piece.isupper() != piece.isupper():
+                                uci_move = self.board.pos_to_engine_move(pos, target_pos)
+                                if uci_move and uci_move not in self._rejected_moves:
+                                    print(f"[REVEAL] ★ Reveal {piece} ({uci_move[:2]}) instead of {engine_best_move[:4]}", flush=True)
+                                    return uci_move
+        return engine_best_move
 
     def _decode_piece_id(self, encoded_id):
         color = 'r'
