@@ -742,11 +742,8 @@ class JieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # ★ Send CURRENT position as standard xiangqi FEN
-            # Engine sees ALL pieces (from raw_face) — plays as regular xiangqi
-            # No X/x, no BAG, no moves list — engine gets exact current position
-            clean_fen = self.visible_board.to_fen()
-            cmd = f"position fen {clean_fen}"
+            # Use the FEN passed by caller (from VisibleBoard)
+            cmd = f"position fen {fen}"
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -1559,7 +1556,7 @@ class JieqiCupBot:
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
-                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
+                raw = self.engine.get_best_move(fen, [], movetime_ms=movetime_ms)
             if not raw:
                 print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True)
                 return
