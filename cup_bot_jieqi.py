@@ -1,24 +1,21 @@
 """
 cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (PikaJieQi)
-Khác biệt vs cup_bot.py:
-Engine: pikajieqi-native (C++ native, không cần wine)
-Movetime: 3000ms (~3s/nước)
-Tự restart engine khi cần
+v1.6 — DEBUG RAW để hiểu toàn bộ logic server
 
-[BẢN SỬA] Bot KHÔNG tự kick/Thoát khi thua — luôn ở lại bàn và ready ván mới.
+Cơ chế cờ úp (theo phân tích):
+- Server gửi sid + face trong START_MATCH, face = sid khi úp (placeholder)
+- Server gửi sid/face là LOẠI QUÂN THẬT (không đánh lừa loại)
+- Vị trí úp (is_open=0) là vị trí ĐỐI THỦ KHÔNG BIẾT
+- Khi lật (MOVE với reveal): server_reveal = loại quân thật
+- Khi ăn quân úp: server có thể gửi reveal char trong MOVE
 
-[BẢN SỬA 1+2] Lưu true_faces từ START_MATCH + detect capture lên quân úp.
-
-[BẢN SỬA 3] Dùng `position fen` với BAG string + FEN động (flip + side-to-move).
-
-[BẢN SỬA 4] FIX bug NotYourPiece:
-- Restore dark_positions SAU set_base
-- Thêm log [FEN-BUILD] để verify FEN có đủ X/x
-
-[BẢN SỬA 5] FIX capture tracking:
-- visible_board.apply_move trả về captured_pos
-- Discard dark_positions khi quân bị ăn
-- Update visible_board với reveal char khi quân lật
+[BẢN SỬA] Bot KHÔNG tự kick/Thoát khi thua.
+[BẢN SỬA 1+2] Lưu true_faces từ START_MATCH + detect capture.
+[BẢN SỬA 3] Dùng `position fen` với BAG string.
+[BẢN SỬA 4] FIX NotYourPiece: restore dark_positions sau set_base.
+[BẢN SỬA 5] FIX capture tracking: visible_board.apply_move return captured.
+[BẢN SỬA 6] DEBUG RAW: log toàn bộ bytes để hiểu cơ chế server.
+[BẢN SỬA 7] PRIORITIZE server_reveal over true_faces cho BAG.
 """
 import struct
 import threading
@@ -406,6 +403,7 @@ TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
 
 
 class XiangqiBoardTracker:
+    """Track toàn bộ state của bàn cờ úp."""
     INITIAL_FEN = "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w"
 
     def __init__(self):
@@ -415,20 +413,26 @@ class XiangqiBoardTracker:
         self.start_fen = self.INITIAL_FEN.split(' ')[0]
         self.start_side = 'w'
         self.uci_moves = []
-        self.revealed_chars = []
+        self.revealed_chars = []  # các ký tự đã lật (cho BAG)
         self.my_slot_id = -1
         self.first_turn_slot_id = 0
         self.is_my_turn = False
         self.is_playing = False
         self.is_red = None
-        self.dark_positions = set()
+        self.dark_positions = set()  # pos đang úp
         self.flip = False
         self.flip_known = False
         self.side_to_move = 'w'
+        # true_faces: pos -> fen_char (từ START_MATCH, có thể sai)
         self.true_faces = {}
+        # lost_pieces: pos đã mất quân
         self.lost_pieces = set()
+        # server_reveals: pos -> fen_char (từ server MOVE packet, tin cậy hơn)
+        self.server_reveals = {}
 
+    # ==================== TRUE FACES (từ START_MATCH) ====================
     def true_face_at(self, pos):
+        """Face thật từ START_MATCH (có thể sai)."""
         return self.true_faces.get(pos)
 
     def set_true_face(self, pos, fen_char):
@@ -436,6 +440,7 @@ class XiangqiBoardTracker:
             self.true_faces[pos] = fen_char
 
     def move_true_face(self, source_pos, target_pos):
+        """Di chuyển face khi quân đi. Trả về (face_di, face_bi_an)."""
         face = self.true_faces.pop(source_pos, None)
         eaten = self.true_faces.pop(target_pos, None)
         if eaten:
@@ -444,42 +449,70 @@ class XiangqiBoardTracker:
             self.true_faces[target_pos] = face
         return face, eaten
 
-    def remove_true_face(self, pos):
-        face = self.true_faces.pop(pos, None)
-        if face:
-            self.lost_pieces.add(pos)
-        return face
+    # ==================== SERVER REVEALS (từ MOVE packet) ====================
+    def server_reveal_at(self, pos):
+        """Reveal từ server cho vị trí này (tin cậy hơn true_faces)."""
+        return self.server_reveals.get(pos)
 
+    def set_server_reveal(self, pos, fen_char):
+        if fen_char:
+            self.server_reveals[pos] = fen_char
+
+    def move_server_reveal(self, source_pos, target_pos):
+        """Di chuyển server_reveal khi quân đi."""
+        sr = self.server_reveals.pop(source_pos, None)
+        self.server_reveals.pop(target_pos, None)
+        if sr:
+            self.server_reveals[target_pos] = sr
+        return sr
+
+    # ==================== POSITION HELPERS ====================
     def pos_to_rc(self, pos):
+        """Chuyển server pos → FEN (row, col) với flip."""
         s_row, col = pos // 9, pos % 9
         return ((9 - s_row) if self.flip else s_row), col
 
     def rc_to_pos(self, fen_row, col):
+        """Chuyển FEN (row, col) → server pos với flip."""
         s_row = (9 - fen_row) if self.flip else fen_row
         return s_row * 9 + col
 
     def pos_to_engine_move(self, source_pos, target_pos):
+        """Chuyển server pos → UCI move."""
         s_row, s_col = self.pos_to_rc(source_pos)
         t_row, t_col = self.pos_to_rc(target_pos)
         return (f"{chr(ord('a') + s_col)}{9 - s_row}"
                 f"{chr(ord('a') + t_col)}{9 - t_row}")
 
     def engine_move_to_pos(self, engine_move):
+        """Chuyển UCI move → server pos."""
         move = engine_move[:4]
         s_col, s_rank = ord(move[0]) - ord('a'), int(move[1])
         t_col, t_rank = ord(move[2]) - ord('a'), int(move[3])
         return (self.rc_to_pos(9 - s_rank, s_col),
                 self.rc_to_pos(9 - t_rank, t_col))
 
+    # ==================== BAG ====================
     def bag_string(self):
+        """BAG: số quân CHƯA LẬT còn lại.
+        Trừ revealed_chars (các lần lật được server xác nhận).
+        """
         bag = dict(INITIAL_BAG)
         for ch in self.revealed_chars:
             if ch in bag:
                 bag[ch] = max(0, bag[ch] - 1)
         return "".join(f"{k}{bag[k]}" for k in BAG_ORDER)
 
+    # ==================== FEN BUILD ====================
     def get_current_fen(self, visible_board):
-        """Build FEN cờ úp cho vị trí HIỆN TẠI, đã tính flip + side-to-move."""
+        """Build FEN cờ úp cho vị trí HIỆN TẠI.
+        
+        Quy tắc:
+        - Quân úp (pos in dark_positions): hiển thị X/x
+        - Quân lật: hiển thị tên thật (từ visible_board)
+        - BAG: bag_string()
+        - side_to_move: bên sắp đi
+        """
         board = [['.' for _ in range(9)] for _ in range(10)]
         n_masked = 0
         for pos, cell in enumerate(visible_board.cells):
@@ -489,11 +522,15 @@ class XiangqiBoardTracker:
             if not (0 <= fen_row < 10 and 0 <= col < 9):
                 continue
             if pos in self.dark_positions:
+                # Quân úp → X/x (giữ màu từ cell)
                 fen_char = 'X' if cell.isupper() else 'x'
                 n_masked += 1
             else:
+                # Quân lật → tên thật
                 fen_char = cell
             board[fen_row][col] = fen_char
+        
+        # Build FEN rows
         fen_rows = []
         for row in board:
             fen_row = ""
@@ -509,17 +546,21 @@ class XiangqiBoardTracker:
             if empty > 0:
                 fen_row += str(empty)
             fen_rows.append(fen_row)
+        
         board_fen = '/'.join(fen_rows)
         bag = self.bag_string()
         side = self.side_to_move
         fen = f"{board_fen} {bag} {side} - - 0 1"
         moves = [m for m in self.uci_moves if UCI_MOVE_WITH_SUFFIX_RE.match(m)]
+        
         n_X = board_fen.count('X') + board_fen.count('x')
         print(f"[FEN-BUILD] dark={len(self.dark_positions)} | masked={n_masked} | "
-              f"X/x={n_X} | side={side} | bag={bag[:20]}...", flush=True)
+              f"X/x={n_X} | side={side} | bag={bag[:25]}...", flush=True)
         return fen, moves
 
+    # ==================== SETUP ====================
     def set_base(self, board_fen, side='w'):
+        """Set base FEN, clear toàn bộ state tracking."""
         board_fen = board_fen.split(' ')[0] if ' ' in board_fen else board_fen
         self.start_fen = board_fen
         self.start_side = side
@@ -528,13 +569,16 @@ class XiangqiBoardTracker:
         self.revealed_chars = []
         self.dark_positions.clear()
         self.true_faces.clear()
+        self.server_reveals.clear()
         self.lost_pieces.clear()
 
     def record_move(self, mv, revealed_char=None):
+        """Ghi nước đi + reveal (nếu có)."""
         uci = mv + (revealed_char or "")
         self.uci_moves.append(uci)
         if revealed_char:
             self.revealed_chars.append(revealed_char)
+        # Đổi bên đi
         self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
         return uci
 
@@ -543,7 +587,9 @@ class XiangqiBoardTracker:
         self.first_turn_slot_id = first_turn_slot_id
         self.is_red = (self.my_slot_id == self.first_turn_slot_id)
 
+    # ==================== FLIP DETECTION ====================
     def detect_flip(self, pieces):
+        """Detect xem bàn có bị flip không (Đỏ ở đâu)."""
         red_rows, black_rows = [], []
         red_king_row = black_king_row = None
         for sid, face, position, is_open in pieces:
@@ -593,7 +639,7 @@ class XiangqiBoardTracker:
 
 
 class VisibleBoard:
-    """Tracks actual piece positions với khả năng detect capture."""
+    """Track vị trí + mặt hiển thị của quân trên bàn."""
     TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
 
     def __init__(self):
@@ -605,6 +651,7 @@ class VisibleBoard:
         self.side_to_move = 'w'
 
     def set_from_pieces(self, pieces, flip):
+        """Set board từ START_MATCH pieces (dùng face từ server)."""
         self.cells = ['.'] * 90
         for sid, face, position, is_open in pieces:
             if position < 0 or position >= 90:
@@ -617,12 +664,8 @@ class VisibleBoard:
                     fen_char = fen_char.upper()
                 self.cells[position] = fen_char
 
-    # ★ SỬA 5: Trả về captured_pos nếu có quân bị ăn
     def apply_move(self, source_pos, target_pos):
-        """Di chuyển quân từ source → target.
-        Returns:
-            captured_pos (int|None): vị trí quân bị ăn, None nếu ô trống
-        """
+        """Di chuyển quân. Trả về captured_pos nếu có quân bị ăn."""
         if not (0 <= source_pos < 90 and 0 <= target_pos < 90):
             return None
         captured_pos = target_pos if self.cells[target_pos] != '.' else None
@@ -631,7 +674,7 @@ class VisibleBoard:
         return captured_pos
 
     def set_cell(self, pos, fen_char):
-        """Set trực tiếp 1 ô (dùng khi quân lật)."""
+        """Set trực tiếp 1 ô."""
         if 0 <= pos < 90:
             self.cells[pos] = fen_char
 
@@ -640,6 +683,7 @@ class VisibleBoard:
 
 
 class JieqiEngine:
+    """Wrapper cho PikaJieQi engine."""
     def __init__(self):
         self.proc = None
         self.binary_path = None
@@ -661,7 +705,6 @@ class JieqiEngine:
             self.engine = False
             return
         print(f"[ENGINE] 🎯 pikajieqi-native = {self.binary_path}")
-
         self._init_engine()
         self.engine = self.proc is not None
 
@@ -900,6 +943,12 @@ class JieqiCupBot:
         self._move_error_count = 0
         self._game_seq = 0
         self._moves_len_at_turn_start = 0
+        # DEBUG counters
+        self._mismatch_count = 0
+        self._server_reveal_matches_true = 0
+        self._server_reveal_matches_src = 0
+        self._server_reveal_matches_tgt = 0
+        self._server_reveal_matches_neither = 0
 
         self.engine = JieqiEngine()
         if not self.engine.engine:
@@ -1281,7 +1330,9 @@ class JieqiCupBot:
 
     def _handle_start_match(self, msg):
         self._game_seq += 1
+        print(f"\n{'='*80}")
         print(f"[GAME] 🎮 Match #{self._game_seq}")
+        print(f"{'='*80}")
         if self.engine and hasattr(self.engine, "_restart_count"):
             self.engine._restart_count = 0
         self._thinking = False
@@ -1299,6 +1350,11 @@ class JieqiCupBot:
         self._move_error_count = 0
         self._last_move_uci = None
         self._last_move_time = 0.0
+        self._mismatch_count = 0
+        self._server_reveal_matches_true = 0
+        self._server_reveal_matches_src = 0
+        self._server_reveal_matches_tgt = 0
+        self._server_reveal_matches_neither = 0
         self.board.reset()
         self.visible_board.reset()
         self.fixed_pawn_positions.clear()
@@ -1335,6 +1391,8 @@ class JieqiCupBot:
                               if self.board.my_slot_id >= 0
                               else first_turn_slot_id)
             self.board.set_my_slot(my_slot_id, first_turn_slot_id)
+
+            # Detect flip
             _built_fen = self._build_fen_from_pieces(board_pieces)
             _ok, _why = self.board.sanity_check_fen(_built_fen)
             if not _ok:
@@ -1349,15 +1407,15 @@ class JieqiCupBot:
                     print(f"[FEN] ❌ Still bad ({_why2})")
                     self.board.flip = not self.board.flip
 
-            # ★ Set visible board từ piece data (face thật)
+            # Set visible_board (dùng face từ server)
             self.visible_board.set_from_pieces(board_pieces, self.board.flip)
             self.visible_board.side_to_move = 'w'
 
-            # ★ Set base TRƯỚC
+            # Set base
             _first_side = 'w' if first_turn_slot_id == 0 else 'b'
             self.board.set_base(_built_fen, _first_side)
 
-            # ★ Restore dark_positions + true_faces sau set_base
+            # Restore dark_positions + true_faces
             for sid, face, position, is_open in board_pieces:
                 if position < 0 or position >= 90:
                     continue
@@ -1377,7 +1435,7 @@ class JieqiCupBot:
             if self.board.true_faces:
                 n_dark_known = sum(1 for p in self.board.dark_positions
                                    if p in self.board.true_faces)
-                print(f"[TRACK] 🧠 Đã giải mã {len(self.board.true_faces)} quân, "
+                print(f"[TRACK] 🧠 Đã decode {len(self.board.true_faces)} quân, "
                       f"trong đó {n_dark_known} quân úp | "
                       f"dark_positions={len(self.board.dark_positions)}")
             if self.fixed_pawn_positions:
@@ -1388,6 +1446,7 @@ class JieqiCupBot:
             print(f"[START] dark={len(self.board.dark_positions)} | "
                   f"my_slot={my_slot_id} | first={first_turn_slot_id} | "
                   f"flip={self.board.flip} | side={self.board.side_to_move}")
+            print(f"{'='*80}\n")
         except Exception as e:
             print(f"[START_MATCH ERROR] {e}")
             traceback.print_exc()
@@ -1425,6 +1484,7 @@ class JieqiCupBot:
 
     @classmethod
     def _sid_to_fen_char(cls, byte_val):
+        """Decode byte → fen_char (uppercase = Đỏ, lowercase = Đen)."""
         v = byte_val - 256 if byte_val > 127 else byte_val
         if v == 0: return None
         ch = cls.PIECE_TYPE_MAP.get(abs(v) >> 3)
@@ -1432,6 +1492,7 @@ class JieqiCupBot:
         return ch.upper() if v > 0 else ch
 
     def _handle_move(self, msg):
+        """Xử lý MOVE packet — với DEBUG RAW đầy đủ để hiểu cơ chế server."""
         with self._move_lock:
             self._move_recv_count += 1
             try:
@@ -1449,33 +1510,80 @@ class JieqiCupBot:
                     self._move_error_count += 1
                     return
                 rest = list(msg.data[msg.offset:]) if msg.offset < len(msg.data) else []
+                
+                # ============ DEBUG RAW ============
                 mover_dark = source_pos in self.board.dark_positions
                 is_flip_move = (source_pos == target_pos)
                 captured_dark = target_pos in self.board.dark_positions
-                captured_face_known = self.board.true_face_at(target_pos)
-
+                true_src = self.board.true_face_at(source_pos)
+                true_tgt = self.board.true_face_at(target_pos)
+                # server_reveal decode từ rest[2]
+                server_reveal = None
+                if rest and len(rest) >= 3 and rest[0] > 0:
+                    server_reveal = self._sid_to_fen_char(rest[2])
+                
+                # Log RAW khi có reveal hoặc úp
+                if mover_dark or is_flip_move or captured_dark or rest:
+                    print(f"[MOVE-RAW] src={source_pos}({true_src or '?'}) "
+                          f"tgt={target_pos}({true_tgt or '?'}) | "
+                          f"mover_dark={mover_dark} captured_dark={captured_dark} "
+                          f"flip={is_flip_move} | "
+                          f"rest={rest[:5]} hex={[f'{b:02x}' for b in rest[:5]]} | "
+                          f"server_reveal={server_reveal}", flush=True)
+                
+                # ============ LOGIC REVEAL ============
                 revealed_char = None
                 if (mover_dark or is_flip_move) and rest and rest[0] > 0 and len(rest) >= 3:
                     cand = self._sid_to_fen_char(rest[2])
                     if cand and cand not in ('k', 'K'):
                         revealed_char = cand
+                        # Verify với true_faces
+                        if true_src and cand != true_src:
+                            self._mismatch_count += 1
+                            print(f"[REVEAL] ⚠️ MISMATCH tại src={source_pos}: "
+                                  f"server='{cand}' vs true_faces='{true_src}'", flush=True)
+                        # Set server_reveal
+                        self.board.set_server_reveal(source_pos, cand)
+                
+                # ============ XỬ LÝ QUÂN ÚP BỊ ĂN ============
+                if captured_dark:
+                    if server_reveal:
+                        # Server gửi reveal cho quân bị ăn
+                        print(f"[CAPTURE-SRV] 🎯 pos={target_pos} bị ăn, "
+                              f"server_reveal='{server_reveal}' "
+                              f"| true_tgt='{true_tgt or 'None'}' "
+                              f"| true_src='{true_src or 'None'}'", flush=True)
+                        # ★ Stat: server_reveal khớp với gì?
+                        if true_tgt and server_reveal == true_tgt:
+                            self._server_reveal_matches_true += 1
+                        if true_src and server_reveal == true_src:
+                            self._server_reveal_matches_src += 1
+                        if server_reveal == true_tgt:
+                            self._server_reveal_matches_tgt += 1
+                        elif server_reveal == true_src:
+                            pass
+                        else:
+                            self._server_reveal_matches_neither += 1
+                        # ★ Dùng server_reveal cho BAG (tin cậy hơn)
+                        if not revealed_char:
+                            # revealed_char là cho quân đi, không phải quân bị ăn
+                            self.board.revealed_chars.append(server_reveal)
+                        # Cập nhật true_faces với giá trị đúng
+                        self.board.set_true_face(target_pos, server_reveal)
+                    elif true_tgt:
+                        # Không có server_reveal → fallback true_faces
+                        print(f"[CAPTURE-OLD] 🎯 pos={target_pos} bị ăn, "
+                              f"true_tgt='{true_tgt}' (no server_reveal)", flush=True)
+                        if not revealed_char:
+                            self.board.revealed_chars.append(true_tgt)
 
-                # ★ SỬA 2: Xử lý quân úp BỊ ĂN
-                if captured_dark and captured_face_known:
-                    server_reveal = (self._sid_to_fen_char(rest[2])
-                                     if rest and len(rest) >= 3 and rest[0] > 0 else None)
-                    print(f"[CAPTURE] 🎯 Quân úp ở {target_pos} bị ăn, "
-                          f"thực tế là '{captured_face_known}' "
-                          f"(server_reveal={server_reveal or 'None'})", flush=True)
-                    if not revealed_char:
-                        self.board.revealed_chars.append(captured_face_known)
-
-                # ★ Update dark_positions
+                # ============ UPDATE dark_positions ============
                 self.board.dark_positions.discard(source_pos)
                 self.board.dark_positions.discard(target_pos)
 
-                # ★ Update true_faces
+                # ============ UPDATE true_faces & server_reveals ============
                 self.board.move_true_face(source_pos, target_pos)
+                self.board.move_server_reveal(source_pos, target_pos)
 
                 full_uci = engine_move + (revealed_char or "")
                 now = time.time()
@@ -1485,20 +1593,22 @@ class JieqiCupBot:
                     return
                 self.board.record_move(engine_move, revealed_char)
 
-                # ★ SỬA 5: Update visible_board với capture tracking
+                # ============ UPDATE visible_board ============
                 src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
                 captured_visible = self.visible_board.apply_move(src_pos, tgt_pos)
                 if captured_visible is not None:
-                    # Quân ở tgt_pos bị ăn → xóa khỏi dark_positions
                     self.board.dark_positions.discard(captured_visible)
-                # Nếu quân đi LẬT → set face thật cho ô đích
                 if revealed_char:
                     self.visible_board.set_cell(tgt_pos, revealed_char)
+                # Nếu quân đi lật, update cả cells[src] trước khi move
+                # (đã làm ở apply_move → cells[src] giờ đã là '.')
                 self.visible_board.flip_side()
 
                 self._last_move_uci = full_uci
                 self._last_move_time = now
                 self._played_this_turn = False
+                
+                # ============ LOG SUMMARY ============
                 print(f"[MOVE] #{self._move_recv_count} {engine_move} -> "
                       f"'{full_uci}' | uci={len(self.board.uci_moves)} "
                       f"revealed={len(self.board.revealed_chars)} "
@@ -1543,12 +1653,11 @@ class JieqiCupBot:
             self.turn_timeout = turn_timeout
             was_my_turn = self.board.is_my_turn
             self.board.is_my_turn = (slot_id == self.board.my_slot_id)
-
+            # Cập nhật side_to_move
             if slot_id == self.board.first_turn_slot_id:
                 self.board.side_to_move = 'w'
             else:
                 self.board.side_to_move = 'b'
-
             self.last_action_timestamp = time.time()
             if not self.board.is_my_turn: return
             self._turn_started_at = time.time()
@@ -1601,6 +1710,12 @@ class JieqiCupBot:
               f"revealed={len(self.board.revealed_chars)} | "
               f"recv={self._move_recv_count} skip={self._move_skip_count} "
               f"err={self._move_error_count} reject={self._play_reject_count}",
+              flush=True)
+        print(f"[CAPTURE-STATS] mismatch={self._mismatch_count} | "
+              f"srv==true_tgt={self._server_reveal_matches_tgt} | "
+              f"srv==true_src={self._server_reveal_matches_src} | "
+              f"srv==neither={self._server_reveal_matches_neither} | "
+              f"srv==true(match)={self._server_reveal_matches_true}",
               flush=True)
 
         self.board.is_playing = False
@@ -1708,6 +1823,7 @@ class JieqiCupBot:
             traceback.print_exc()
 
     def _decode_piece_id(self, encoded_id):
+        """Decode byte → string như 'r61' (r=Đỏ, 6=mã, 1=variant)."""
         color = 'r'
         if encoded_id < 0: encoded_id = -encoded_id; color = 'b'
         return f"{color}{encoded_id >> 3}{'' if (encoded_id & 7) == 0 else (encoded_id & 7)}"
@@ -1720,7 +1836,10 @@ class JieqiCupBot:
         threading.Thread(target=loop, daemon=True).start()
 
     def run(self):
-        print("[BOT] Khởi chạy cờ úp Jieqi v1.5 (position fen + capture tracking)...")
+        print("\n" + "="*80)
+        print("[BOT] Khởi chạy cờ úp Jieqi v1.6")
+        print("[BOT] DEBUG RAW + PRIORITIZE server_reveal + CAPTURE STATS")
+        print("="*80 + "\n")
         while True:
             try:
                 now_ts = time.time()
