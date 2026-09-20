@@ -99,18 +99,41 @@ def parse_start_match(data: bytes) -> dict[str, Any]:
     }
 
 
+PIECE_TYPE_TO_FEN = {1: "k", 2: "a", 3: "b", 4: "r", 5: "c", 6: "n", 7: "p"}
+
+
+def decode_face_byte(raw: int) -> str | None:
+    """Decode the revealed-piece byte used by GameVH MOVE payloads."""
+    value = s8(raw)
+    if value == 0:
+        return None
+    piece = PIECE_TYPE_TO_FEN.get(abs(value) >> 3)
+    if not piece:
+        return None
+    return piece.upper() if value > 0 else piece
+
+
 def parse_move(data: bytes) -> dict[str, Any]:
-    """Parse a MOVE event into a reusable, JSON-safe event."""
+    """Parse MOVE, including the revealed piece, from the wire payload.
+
+    GameVH puts the revealed SID at payload byte 2 when payload byte 0 is
+    non-zero. Keep this rule here so the bot does not independently interpret
+    raw WebSocket bytes.
+    """
     cmd, off = command_id(data)
     if cmd != "MOVE":
         raise ValueError(f"not MOVE: {cmd!r}")
     source, off = u8(data, off)
     target, off = u8(data, off)
+    payload = data[off:]
+    reveal_byte = payload[2] if len(payload) >= 3 and payload[0] > 0 else None
     return {
         "command": "MOVE",
         "source": source,
         "target": target,
-        "payload_hex": data[off:].hex(),
+        "payload_hex": payload.hex(),
+        "reveal_byte": reveal_byte,
+        "revealed_piece": decode_face_byte(reveal_byte) if reveal_byte is not None else None,
     }
 
 
