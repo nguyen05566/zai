@@ -574,6 +574,14 @@ class VisibleBoard:
         if 0 <= position < 90 and fen_char in 'KABRNCPkab rncp'.replace(' ', ''):
             self.cells[position] = fen_char
 
+    def actual_piece_at(self, position):
+        """Return the server-provided actual piece at a square, if usable."""
+        if 0 <= position < 90:
+            piece = self.cells[position]
+            if piece in 'KABRNCPkab rncp'.replace(' ', ''):
+                return piece
+        return None
+
     def to_fen(self, bag='-'):
         """Convert to FEN string.
         Server positions: pos = row * 9 + col (row 0 = RED bottom, row 9 = BLACK top)
@@ -1422,9 +1430,23 @@ class JieqiCupBot:
                 is_flip_move = (source_pos == target_pos)
                 revealed_char = None
                 if (mover_dark or is_flip_move) and rest and rest[0] > 0 and len(rest) >= 3:
-                    cand = self._sid_to_fen_char(rest[2])
-                    if cand and cand not in ('k', 'K'):
-                        revealed_char = cand
+                    payload_piece = self._sid_to_fen_char(rest[2])
+                    board_piece = self.visible_board.actual_piece_at(source_pos)
+                    if board_piece and board_piece not in ('k', 'K'):
+                        # raw_face from START_MATCH is authoritative for the
+                        # hidden piece at this square.  Some MOVE payloads
+                        # carry a different piece-id field, which previously
+                        # turned a revealed elephant into a pawn (e.g. g9i7p).
+                        revealed_char = board_piece
+                        if payload_piece and payload_piece != board_piece:
+                            print(
+                                f"[REVEAL] payload={payload_piece} != "
+                                f"board={board_piece} at pos={source_pos}; "
+                                "using board value",
+                                flush=True,
+                            )
+                    elif payload_piece and payload_piece not in ('k', 'K'):
+                        revealed_char = payload_piece
                 self.board.dark_positions.discard(source_pos)
                 self.board.dark_positions.discard(target_pos)
                 full_uci = engine_move + (revealed_char or "")
