@@ -741,10 +741,13 @@ class JieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # ★ USE VISIBLE BOARD: send current position as standard FEN
-            # No moves list needed — engine gets exact current position
-            clean_fen = self.visible_board.to_fen(self.board.flip)
-            cmd = f"position fen {clean_fen}"
+            # ★ Use "position startpos moves ..." — PikaJieQi's native format
+            # PikaJieQi auto-tracks BAG and dark piece reveals from move suffixes
+            # BAG updates correctly: c3c4N → N2→N1 in BAG
+            # Engine uses BAG for expected value calculation in flip_search
+            cmd = "position startpos"
+            if moves:
+                cmd += " moves " + " ".join(moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
