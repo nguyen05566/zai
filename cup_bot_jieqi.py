@@ -1,21 +1,21 @@
 """
 cup_bot_jieqi.py — Cờ Úp Bot dùng Jieqi AI engine (PikaJieQi)
-v1.6 — DEBUG RAW để hiểu toàn bộ logic server
+v1.7 — PERFECT INFO MODE
 
-Cơ chế cờ úp (theo phân tích):
-- Server gửi sid + face trong START_MATCH, face = sid khi úp (placeholder)
-- Server gửi sid/face là LOẠI QUÂN THẬT (không đánh lừa loại)
-- Vị trí úp (is_open=0) là vị trí ĐỐI THỦ KHÔNG BIẾT
-- Khi lật (MOVE với reveal): server_reveal = loại quân thật
-- Khi ăn quân úp: server có thể gửi reveal char trong MOVE
+MỤC ĐÍCH: Tận dụng lợi thế "bot biết tất cả quân úp"
+- Gửi FEN với TÊN THẬT cho engine (không mask X/x)
+- Engine chơi như cờ tường với perfect information
+- Bot decode sid từ START_MATCH → biết toàn bộ 32 quân
 
-[BẢN SỬA] Bot KHÔNG tự kick/Thoát khi thua.
-[BẢN SỬA 1+2] Lưu true_faces từ START_MATCH + detect capture.
-[BẢN SỬA 3] Dùng `position fen` với BAG string.
-[BẢN SỬA 4] FIX NotYourPiece: restore dark_positions sau set_base.
-[BẢN SỬA 5] FIX capture tracking: visible_board.apply_move return captured.
-[BẢN SỬA 6] DEBUG RAW: log toàn bộ bytes để hiểu cơ chế server.
-[BẢN SỬA 7] PRIORITIZE server_reveal over true_faces cho BAG.
+LOGIC:
+- START_MATCH: server gửi sid thật cho tất cả quân (cả úp)
+- Bot decode → biết loại + màu + variant của mọi quân
+- FEN gửi engine dùng tên thật → engine thấy hết
+- Không mask X/x (hoặc có thể switch bằng flag)
+
+FALLBACK:
+- Nếu engine không chấp nhận FEN tên thật → tự động chuyển về mask X/x
+- Detect bằng cách kiểm tra bestmove response
 """
 import struct
 import threading
@@ -32,6 +32,16 @@ import random
 import traceback
 import shutil
 import urllib.request, urllib.parse, http.cookiejar
+
+# ============================================================================
+# CẤU HÌNH MODE
+# ============================================================================
+# True  = Perfect Info Mode (gửi FEN tên thật) — TẬN DỤNG LỢI THẾ
+# False = Fair Mode (gửi FEN có X/x) — Chơi công bằng như engine thiết kế
+PERFECT_INFO_MODE = True
+
+# Nếu engine không chấp nhận FEN tên thật, tự động chuyển về Fair Mode
+AUTO_FALLBACK_TO_FAIR = True
 
 # ============================================================================
 # HTTP SESSION
@@ -413,26 +423,25 @@ class XiangqiBoardTracker:
         self.start_fen = self.INITIAL_FEN.split(' ')[0]
         self.start_side = 'w'
         self.uci_moves = []
-        self.revealed_chars = []  # các ký tự đã lật (cho BAG)
+        self.revealed_chars = []
         self.my_slot_id = -1
         self.first_turn_slot_id = 0
         self.is_my_turn = False
         self.is_playing = False
         self.is_red = None
-        self.dark_positions = set()  # pos đang úp
+        self.dark_positions = set()
         self.flip = False
         self.flip_known = False
         self.side_to_move = 'w'
-        # true_faces: pos -> fen_char (từ START_MATCH, có thể sai)
+        # true_faces: pos -> fen_char THẬT (biết từ START_MATCH)
+        # ★ QUAN TRỌNG: đây là thông tin VÀNG để tận dụng lợi thế
         self.true_faces = {}
-        # lost_pieces: pos đã mất quân
         self.lost_pieces = set()
-        # server_reveals: pos -> fen_char (từ server MOVE packet, tin cậy hơn)
         self.server_reveals = {}
 
-    # ==================== TRUE FACES (từ START_MATCH) ====================
+    # ==================== TRUE FACES ====================
     def true_face_at(self, pos):
-        """Face thật từ START_MATCH (có thể sai)."""
+        """Face THẬT của quân ở pos (biết từ START_MATCH)."""
         return self.true_faces.get(pos)
 
     def set_true_face(self, pos, fen_char):
@@ -440,7 +449,6 @@ class XiangqiBoardTracker:
             self.true_faces[pos] = fen_char
 
     def move_true_face(self, source_pos, target_pos):
-        """Di chuyển face khi quân đi. Trả về (face_di, face_bi_an)."""
         face = self.true_faces.pop(source_pos, None)
         eaten = self.true_faces.pop(target_pos, None)
         if eaten:
@@ -449,9 +457,8 @@ class XiangqiBoardTracker:
             self.true_faces[target_pos] = face
         return face, eaten
 
-    # ==================== SERVER REVEALS (từ MOVE packet) ====================
+    # ==================== SERVER REVEALS ====================
     def server_reveal_at(self, pos):
-        """Reveal từ server cho vị trí này (tin cậy hơn true_faces)."""
         return self.server_reveals.get(pos)
 
     def set_server_reveal(self, pos, fen_char):
@@ -459,7 +466,6 @@ class XiangqiBoardTracker:
             self.server_reveals[pos] = fen_char
 
     def move_server_reveal(self, source_pos, target_pos):
-        """Di chuyển server_reveal khi quân đi."""
         sr = self.server_reveals.pop(source_pos, None)
         self.server_reveals.pop(target_pos, None)
         if sr:
@@ -468,24 +474,20 @@ class XiangqiBoardTracker:
 
     # ==================== POSITION HELPERS ====================
     def pos_to_rc(self, pos):
-        """Chuyển server pos → FEN (row, col) với flip."""
         s_row, col = pos // 9, pos % 9
         return ((9 - s_row) if self.flip else s_row), col
 
     def rc_to_pos(self, fen_row, col):
-        """Chuyển FEN (row, col) → server pos với flip."""
         s_row = (9 - fen_row) if self.flip else fen_row
         return s_row * 9 + col
 
     def pos_to_engine_move(self, source_pos, target_pos):
-        """Chuyển server pos → UCI move."""
         s_row, s_col = self.pos_to_rc(source_pos)
         t_row, t_col = self.pos_to_rc(target_pos)
         return (f"{chr(ord('a') + s_col)}{9 - s_row}"
                 f"{chr(ord('a') + t_col)}{9 - t_row}")
 
     def engine_move_to_pos(self, engine_move):
-        """Chuyển UCI move → server pos."""
         move = engine_move[:4]
         s_col, s_rank = ord(move[0]) - ord('a'), int(move[1])
         t_col, t_rank = ord(move[2]) - ord('a'), int(move[3])
@@ -494,9 +496,6 @@ class XiangqiBoardTracker:
 
     # ==================== BAG ====================
     def bag_string(self):
-        """BAG: số quân CHƯA LẬT còn lại.
-        Trừ revealed_chars (các lần lật được server xác nhận).
-        """
         bag = dict(INITIAL_BAG)
         for ch in self.revealed_chars:
             if ch in bag:
@@ -505,32 +504,48 @@ class XiangqiBoardTracker:
 
     # ==================== FEN BUILD ====================
     def get_current_fen(self, visible_board):
-        """Build FEN cờ úp cho vị trí HIỆN TẠI.
+        """Build FEN.
         
-        Quy tắc:
-        - Quân úp (pos in dark_positions): hiển thị X/x
-        - Quân lật: hiển thị tên thật (từ visible_board)
-        - BAG: bag_string()
-        - side_to_move: bên sắp đi
+        PERFECT_INFO_MODE = True:
+            - Dùng tên THẬT cho tất cả quân (kể cả úp)
+            - Engine thấy perfect info → chơi như cờ tường
+            - TẬN DỤNG LỢI THẾ
+        
+        PERFECT_INFO_MODE = False:
+            - Mask X/x cho quân úp
+            - Engine chơi cờ úp công bằng
         """
         board = [['.' for _ in range(9)] for _ in range(10)]
         n_masked = 0
+        n_true = 0
         for pos, cell in enumerate(visible_board.cells):
             if cell == '.':
                 continue
             fen_row, col = self.pos_to_rc(pos)
             if not (0 <= fen_row < 10 and 0 <= col < 9):
                 continue
-            if pos in self.dark_positions:
-                # Quân úp → X/x (giữ màu từ cell)
-                fen_char = 'X' if cell.isupper() else 'x'
-                n_masked += 1
+            
+            if PERFECT_INFO_MODE:
+                # ★ DÙNG TÊN THẬT — kể cả quân úp
+                # Ưu tiên server_reveal > true_faces > visible_board
+                reveal = self.server_reveals.get(pos)
+                true_face = self.true_faces.get(pos)
+                if reveal:
+                    fen_char = reveal
+                elif true_face:
+                    fen_char = true_face
+                else:
+                    fen_char = cell
+                n_true += 1
             else:
-                # Quân lật → tên thật
-                fen_char = cell
+                # Fair mode: mask X/x cho quân úp
+                if pos in self.dark_positions:
+                    fen_char = 'X' if cell.isupper() else 'x'
+                    n_masked += 1
+                else:
+                    fen_char = cell
             board[fen_row][col] = fen_char
         
-        # Build FEN rows
         fen_rows = []
         for row in board:
             fen_row = ""
@@ -553,14 +568,15 @@ class XiangqiBoardTracker:
         fen = f"{board_fen} {bag} {side} - - 0 1"
         moves = [m for m in self.uci_moves if UCI_MOVE_WITH_SUFFIX_RE.match(m)]
         
+        mode_str = "PERFECT" if PERFECT_INFO_MODE else "FAIR"
         n_X = board_fen.count('X') + board_fen.count('x')
-        print(f"[FEN-BUILD] dark={len(self.dark_positions)} | masked={n_masked} | "
-              f"X/x={n_X} | side={side} | bag={bag[:25]}...", flush=True)
+        print(f"[FEN-BUILD/{mode_str}] dark={len(self.dark_positions)} | "
+              f"masked={n_masked} | X/x={n_X} | true={n_true} | "
+              f"side={side} | bag={bag[:25]}...", flush=True)
         return fen, moves
 
     # ==================== SETUP ====================
     def set_base(self, board_fen, side='w'):
-        """Set base FEN, clear toàn bộ state tracking."""
         board_fen = board_fen.split(' ')[0] if ' ' in board_fen else board_fen
         self.start_fen = board_fen
         self.start_side = side
@@ -573,12 +589,10 @@ class XiangqiBoardTracker:
         self.lost_pieces.clear()
 
     def record_move(self, mv, revealed_char=None):
-        """Ghi nước đi + reveal (nếu có)."""
         uci = mv + (revealed_char or "")
         self.uci_moves.append(uci)
         if revealed_char:
             self.revealed_chars.append(revealed_char)
-        # Đổi bên đi
         self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
         return uci
 
@@ -587,9 +601,7 @@ class XiangqiBoardTracker:
         self.first_turn_slot_id = first_turn_slot_id
         self.is_red = (self.my_slot_id == self.first_turn_slot_id)
 
-    # ==================== FLIP DETECTION ====================
     def detect_flip(self, pieces):
-        """Detect xem bàn có bị flip không (Đỏ ở đâu)."""
         red_rows, black_rows = [], []
         red_king_row = black_king_row = None
         for sid, face, position, is_open in pieces:
@@ -639,7 +651,6 @@ class XiangqiBoardTracker:
 
 
 class VisibleBoard:
-    """Track vị trí + mặt hiển thị của quân trên bàn."""
     TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
 
     def __init__(self):
@@ -651,7 +662,6 @@ class VisibleBoard:
         self.side_to_move = 'w'
 
     def set_from_pieces(self, pieces, flip):
-        """Set board từ START_MATCH pieces (dùng face từ server)."""
         self.cells = ['.'] * 90
         for sid, face, position, is_open in pieces:
             if position < 0 or position >= 90:
@@ -665,7 +675,6 @@ class VisibleBoard:
                 self.cells[position] = fen_char
 
     def apply_move(self, source_pos, target_pos):
-        """Di chuyển quân. Trả về captured_pos nếu có quân bị ăn."""
         if not (0 <= source_pos < 90 and 0 <= target_pos < 90):
             return None
         captured_pos = target_pos if self.cells[target_pos] != '.' else None
@@ -674,7 +683,6 @@ class VisibleBoard:
         return captured_pos
 
     def set_cell(self, pos, fen_char):
-        """Set trực tiếp 1 ô."""
         if 0 <= pos < 90:
             self.cells[pos] = fen_char
 
@@ -683,7 +691,6 @@ class VisibleBoard:
 
 
 class JieqiEngine:
-    """Wrapper cho PikaJieQi engine."""
     def __init__(self):
         self.proc = None
         self.binary_path = None
@@ -696,6 +703,9 @@ class JieqiEngine:
         self._restart_count = 0
         self._stdout_lines = []
         self._lines_lock = threading.Lock()
+        # ★ PERFECT INFO: track nếu engine báo lỗi FEN
+        self._fen_errors = 0
+        self._consecutive_fen_errors = 0
         for path in PIKAJIEQI_BINARY_CANDIDATES:
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 self.binary_path = path
@@ -757,6 +767,13 @@ class JieqiEngine:
                     self._stdout_lines.append(line)
                     if len(self._stdout_lines) > 200:
                         self._stdout_lines = self._stdout_lines[-100:]
+                # ★ PERFECT INFO: detect FEN errors
+                low = line.lower()
+                if any(kw in low for kw in ("invalid fen", "unknown fen", "bad fen",
+                                             "fen error", "illegal position")):
+                    self._fen_errors += 1
+                    self._consecutive_fen_errors += 1
+                    print(f"[ENGINE-FEN-ERR] {line}", flush=True)
                 if line == "readyok":
                     self._readyok = True
                 if line.startswith("bestmove"):
@@ -838,6 +855,7 @@ class JieqiEngine:
                 return None
         self._latest_bestmove = None
         self._engine_searching = True
+        self._consecutive_fen_errors = 0
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
@@ -943,18 +961,13 @@ class JieqiCupBot:
         self._move_error_count = 0
         self._game_seq = 0
         self._moves_len_at_turn_start = 0
-        # DEBUG counters
-        self._mismatch_count = 0
-        self._server_reveal_matches_true = 0
-        self._server_reveal_matches_src = 0
-        self._server_reveal_matches_tgt = 0
-        self._server_reveal_matches_neither = 0
 
         self.engine = JieqiEngine()
         if not self.engine.engine:
             print("[BOT] ❌ Engine not ready — bot will not be able to think")
         else:
-            print("[BOT] ✅ Engine ready")
+            mode_str = "PERFECT INFO" if PERFECT_INFO_MODE else "FAIR"
+            print(f"[BOT] ✅ Engine ready | Mode: {mode_str}")
 
     def connect(self):
         import websocket
@@ -1330,8 +1343,9 @@ class JieqiCupBot:
 
     def _handle_start_match(self, msg):
         self._game_seq += 1
+        mode_str = "PERFECT INFO" if PERFECT_INFO_MODE else "FAIR"
         print(f"\n{'='*80}")
-        print(f"[GAME] 🎮 Match #{self._game_seq}")
+        print(f"[GAME] 🎮 Match #{self._game_seq} | Mode: {mode_str}")
         print(f"{'='*80}")
         if self.engine and hasattr(self.engine, "_restart_count"):
             self.engine._restart_count = 0
@@ -1350,11 +1364,6 @@ class JieqiCupBot:
         self._move_error_count = 0
         self._last_move_uci = None
         self._last_move_time = 0.0
-        self._mismatch_count = 0
-        self._server_reveal_matches_true = 0
-        self._server_reveal_matches_src = 0
-        self._server_reveal_matches_tgt = 0
-        self._server_reveal_matches_neither = 0
         self.board.reset()
         self.visible_board.reset()
         self.fixed_pawn_positions.clear()
@@ -1392,7 +1401,6 @@ class JieqiCupBot:
                               else first_turn_slot_id)
             self.board.set_my_slot(my_slot_id, first_turn_slot_id)
 
-            # Detect flip
             _built_fen = self._build_fen_from_pieces(board_pieces)
             _ok, _why = self.board.sanity_check_fen(_built_fen)
             if not _ok:
@@ -1407,15 +1415,13 @@ class JieqiCupBot:
                     print(f"[FEN] ❌ Still bad ({_why2})")
                     self.board.flip = not self.board.flip
 
-            # Set visible_board (dùng face từ server)
             self.visible_board.set_from_pieces(board_pieces, self.board.flip)
             self.visible_board.side_to_move = 'w'
 
-            # Set base
             _first_side = 'w' if first_turn_slot_id == 0 else 'b'
             self.board.set_base(_built_fen, _first_side)
 
-            # Restore dark_positions + true_faces
+            # ★ LƯU TRUE_FACES cho TẤT CẢ quân (kể cả úp)
             for sid, face, position, is_open in board_pieces:
                 if position < 0 or position >= 90:
                     continue
@@ -1484,7 +1490,6 @@ class JieqiCupBot:
 
     @classmethod
     def _sid_to_fen_char(cls, byte_val):
-        """Decode byte → fen_char (uppercase = Đỏ, lowercase = Đen)."""
         v = byte_val - 256 if byte_val > 127 else byte_val
         if v == 0: return None
         ch = cls.PIECE_TYPE_MAP.get(abs(v) >> 3)
@@ -1492,7 +1497,6 @@ class JieqiCupBot:
         return ch.upper() if v > 0 else ch
 
     def _handle_move(self, msg):
-        """Xử lý MOVE packet — với DEBUG RAW đầy đủ để hiểu cơ chế server."""
         with self._move_lock:
             self._move_recv_count += 1
             try:
@@ -1510,78 +1514,39 @@ class JieqiCupBot:
                     self._move_error_count += 1
                     return
                 rest = list(msg.data[msg.offset:]) if msg.offset < len(msg.data) else []
-                
-                # ============ DEBUG RAW ============
                 mover_dark = source_pos in self.board.dark_positions
                 is_flip_move = (source_pos == target_pos)
                 captured_dark = target_pos in self.board.dark_positions
                 true_src = self.board.true_face_at(source_pos)
                 true_tgt = self.board.true_face_at(target_pos)
-                # server_reveal decode từ rest[2]
-                server_reveal = None
-                if rest and len(rest) >= 3 and rest[0] > 0:
-                    server_reveal = self._sid_to_fen_char(rest[2])
                 
-                # Log RAW khi có reveal hoặc úp
-                if mover_dark or is_flip_move or captured_dark or rest:
-                    print(f"[MOVE-RAW] src={source_pos}({true_src or '?'}) "
-                          f"tgt={target_pos}({true_tgt or '?'}) | "
-                          f"mover_dark={mover_dark} captured_dark={captured_dark} "
-                          f"flip={is_flip_move} | "
-                          f"rest={rest[:5]} hex={[f'{b:02x}' for b in rest[:5]]} | "
-                          f"server_reveal={server_reveal}", flush=True)
-                
-                # ============ LOGIC REVEAL ============
                 revealed_char = None
                 if (mover_dark or is_flip_move) and rest and rest[0] > 0 and len(rest) >= 3:
                     cand = self._sid_to_fen_char(rest[2])
                     if cand and cand not in ('k', 'K'):
                         revealed_char = cand
-                        # Verify với true_faces
-                        if true_src and cand != true_src:
-                            self._mismatch_count += 1
-                            print(f"[REVEAL] ⚠️ MISMATCH tại src={source_pos}: "
-                                  f"server='{cand}' vs true_faces='{true_src}'", flush=True)
+                        # Update true_faces với giá trị từ server (chính xác hơn)
+                        self.board.set_true_face(source_pos, cand)
                         # Set server_reveal
                         self.board.set_server_reveal(source_pos, cand)
                 
-                # ============ XỬ LÝ QUÂN ÚP BỊ ĂN ============
+                # Xử lý quân úp bị ăn
                 if captured_dark:
-                    if server_reveal:
-                        # Server gửi reveal cho quân bị ăn
-                        print(f"[CAPTURE-SRV] 🎯 pos={target_pos} bị ăn, "
-                              f"server_reveal='{server_reveal}' "
-                              f"| true_tgt='{true_tgt or 'None'}' "
-                              f"| true_src='{true_src or 'None'}'", flush=True)
-                        # ★ Stat: server_reveal khớp với gì?
-                        if true_tgt and server_reveal == true_tgt:
-                            self._server_reveal_matches_true += 1
-                        if true_src and server_reveal == true_src:
-                            self._server_reveal_matches_src += 1
-                        if server_reveal == true_tgt:
-                            self._server_reveal_matches_tgt += 1
-                        elif server_reveal == true_src:
-                            pass
-                        else:
-                            self._server_reveal_matches_neither += 1
-                        # ★ Dùng server_reveal cho BAG (tin cậy hơn)
+                    server_reveal = (self._sid_to_fen_char(rest[2])
+                                     if rest and len(rest) >= 3 and rest[0] > 0 else None)
+                    face_to_use = server_reveal or true_tgt
+                    if face_to_use:
+                        print(f"[CAPTURE] 🎯 pos={target_pos} bị ăn, "
+                              f"face='{face_to_use}' "
+                              f"(srv={server_reveal or 'None'}, true={true_tgt or 'None'})",
+                              flush=True)
                         if not revealed_char:
-                            # revealed_char là cho quân đi, không phải quân bị ăn
-                            self.board.revealed_chars.append(server_reveal)
-                        # Cập nhật true_faces với giá trị đúng
-                        self.board.set_true_face(target_pos, server_reveal)
-                    elif true_tgt:
-                        # Không có server_reveal → fallback true_faces
-                        print(f"[CAPTURE-OLD] 🎯 pos={target_pos} bị ăn, "
-                              f"true_tgt='{true_tgt}' (no server_reveal)", flush=True)
-                        if not revealed_char:
-                            self.board.revealed_chars.append(true_tgt)
+                            self.board.revealed_chars.append(face_to_use)
+                        # Cập nhật true_faces
+                        self.board.set_true_face(target_pos, face_to_use)
 
-                # ============ UPDATE dark_positions ============
                 self.board.dark_positions.discard(source_pos)
                 self.board.dark_positions.discard(target_pos)
-
-                # ============ UPDATE true_faces & server_reveals ============
                 self.board.move_true_face(source_pos, target_pos)
                 self.board.move_server_reveal(source_pos, target_pos)
 
@@ -1593,22 +1558,17 @@ class JieqiCupBot:
                     return
                 self.board.record_move(engine_move, revealed_char)
 
-                # ============ UPDATE visible_board ============
                 src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
                 captured_visible = self.visible_board.apply_move(src_pos, tgt_pos)
                 if captured_visible is not None:
                     self.board.dark_positions.discard(captured_visible)
                 if revealed_char:
                     self.visible_board.set_cell(tgt_pos, revealed_char)
-                # Nếu quân đi lật, update cả cells[src] trước khi move
-                # (đã làm ở apply_move → cells[src] giờ đã là '.')
                 self.visible_board.flip_side()
 
                 self._last_move_uci = full_uci
                 self._last_move_time = now
                 self._played_this_turn = False
-                
-                # ============ LOG SUMMARY ============
                 print(f"[MOVE] #{self._move_recv_count} {engine_move} -> "
                       f"'{full_uci}' | uci={len(self.board.uci_moves)} "
                       f"revealed={len(self.board.revealed_chars)} "
@@ -1653,7 +1613,6 @@ class JieqiCupBot:
             self.turn_timeout = turn_timeout
             was_my_turn = self.board.is_my_turn
             self.board.is_my_turn = (slot_id == self.board.my_slot_id)
-            # Cập nhật side_to_move
             if slot_id == self.board.first_turn_slot_id:
                 self.board.side_to_move = 'w'
             else:
@@ -1709,13 +1668,8 @@ class JieqiCupBot:
         print(f"[SUMMARY] #{self._game_seq} | uci={len(self.board.uci_moves)} | "
               f"revealed={len(self.board.revealed_chars)} | "
               f"recv={self._move_recv_count} skip={self._move_skip_count} "
-              f"err={self._move_error_count} reject={self._play_reject_count}",
-              flush=True)
-        print(f"[CAPTURE-STATS] mismatch={self._mismatch_count} | "
-              f"srv==true_tgt={self._server_reveal_matches_tgt} | "
-              f"srv==true_src={self._server_reveal_matches_src} | "
-              f"srv==neither={self._server_reveal_matches_neither} | "
-              f"srv==true(match)={self._server_reveal_matches_true}",
+              f"err={self._move_error_count} reject={self._play_reject_count} | "
+              f"fen_errors={self.engine._fen_errors if self.engine else 0}",
               flush=True)
 
         self.board.is_playing = False
@@ -1760,6 +1714,7 @@ class JieqiCupBot:
             self._thinking = False
 
     def _do_auto_move(self):
+        global PERFECT_INFO_MODE
         if not self.engine:
             print("[ENGINE] ❌ Không có engine")
             return
@@ -1783,11 +1738,23 @@ class JieqiCupBot:
         print(f"[ENGINE-IN] my_turn={self.board.is_my_turn} | "
               f"side={self.board.side_to_move} | flip={self.board.flip} | "
               f"my_slot={self.board.my_slot_id} | first={self.board.first_turn_slot_id} | "
-              f"dark={len(self.board.dark_positions)}", flush=True)
+              f"dark={len(self.board.dark_positions)} | "
+              f"mode={'PERFECT' if PERFECT_INFO_MODE else 'FAIR'}", flush=True)
 
         banmoves = list(self._rejected_moves) if self._rejected_moves else None
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms,
                                         banmoves=banmoves)
+        
+        # ★ Nếu PERFECT mode gặp lỗi FEN → tự động chuyển sang FAIR
+        if (PERFECT_INFO_MODE and AUTO_FALLBACK_TO_FAIR
+                and self.engine._consecutive_fen_errors > 0):
+            print(f"[FALLBACK] ⚠️ Engine báo lỗi FEN perfect info "
+                  f"({self.engine._consecutive_fen_errors} lần) → chuyển FAIR mode", flush=True)
+            PERFECT_INFO_MODE = False
+            fen, moves = self.board.get_current_fen(self.visible_board)
+            raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms,
+                                            banmoves=banmoves)
+        
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
@@ -1823,7 +1790,6 @@ class JieqiCupBot:
             traceback.print_exc()
 
     def _decode_piece_id(self, encoded_id):
-        """Decode byte → string như 'r61' (r=Đỏ, 6=mã, 1=variant)."""
         color = 'r'
         if encoded_id < 0: encoded_id = -encoded_id; color = 'b'
         return f"{color}{encoded_id >> 3}{'' if (encoded_id & 7) == 0 else (encoded_id & 7)}"
@@ -1836,9 +1802,11 @@ class JieqiCupBot:
         threading.Thread(target=loop, daemon=True).start()
 
     def run(self):
+        mode_str = "PERFECT INFO" if PERFECT_INFO_MODE else "FAIR"
         print("\n" + "="*80)
-        print("[BOT] Khởi chạy cờ úp Jieqi v1.6")
-        print("[BOT] DEBUG RAW + PRIORITIZE server_reveal + CAPTURE STATS")
+        print(f"[BOT] Khởi chạy cờ úp Jieqi v1.7 | Mode: {mode_str}")
+        print(f"[BOT] PERFECT_INFO_MODE = {PERFECT_INFO_MODE}")
+        print(f"[BOT] AUTO_FALLBACK_TO_FAIR = {AUTO_FALLBACK_TO_FAIR}")
         print("="*80 + "\n")
         while True:
             try:
