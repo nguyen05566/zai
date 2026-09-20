@@ -873,12 +873,15 @@ class JieqiCupBot:
     def _on_message(self, ws, message):
         self.last_recv_timestamp = time.time()
         if isinstance(message, bytes):
-            # ★ WS frame dump: log all incoming binary frames
+            # Decode once and make the parsed event available to handlers.
+            # This keeps the WS dump/parser and game state on the same input.
+            self._decoded_ws_event = None
             try:
-                from ws_frame_dump import log_incoming_frame
+                from ws_frame_dump import decode_frame, log_incoming_frame
+                self._decoded_ws_event = decode_frame(message)
                 log_incoming_frame(message)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[WS-CAPTURE] decode failed: {exc}", flush=True)
             self._handle_binary_message(message)
 
     def _on_error(self, ws, error):
@@ -1256,12 +1259,21 @@ class JieqiCupBot:
                 msg.read_byte(); msg.read_int()
             piece_count = msg.read_byte()
             board_pieces = []
-            for _ in range(piece_count):
+            parsed_event = getattr(self, "_decoded_ws_event", None)
+            parsed_pieces = (parsed_event or {}).get("pieces", [])
+            for index in range(piece_count):
+                # Consume the wire bytes for the normal message reader. The
+                # shared parser supplies the exact same decoded piece data.
                 raw_sid = msg.read_byte(); raw_face = msg.read_byte()
                 pos = msg.read_byte(); is_open = msg.read_byte()
-                board_pieces.append((self._decode_piece_id(raw_sid),
-                                     self._decode_piece_id(raw_face),
-                                     pos, is_open))
+                if index < len(parsed_pieces):
+                    p = parsed_pieces[index]
+                    board_pieces.append((p["sid_decoded"], p["face_decoded"],
+                                         p["position"], p["is_open"]))
+                else:
+                    board_pieces.append((self._decode_piece_id(raw_sid),
+                                         self._decode_piece_id(raw_face),
+                                         pos, is_open))
             msg.read_byte(); mystery_count = msg.read_byte()
             for _ in range(mystery_count): msg.read_byte()
             msg.read_byte(); msg.read_byte()
