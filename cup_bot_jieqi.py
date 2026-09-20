@@ -1504,6 +1504,12 @@ class JieqiCupBot:
                 turn_timeout = 0
             if slot_id == -2 or slot_id == -1 or not self.board.is_playing: return
             self.turn_timeout = turn_timeout
+            # SET_TURN is authoritative.  Do not infer the side only by
+            # toggling after every MOVE frame: duplicate/missing websocket
+            # frames can otherwise leave the engine one ply ahead/behind.
+            turn_side = 'w' if slot_id == self.board.first_turn_slot_id else 'b'
+            self.board.side_to_move = turn_side
+            self.visible_board.side_to_move = turn_side
             was_my_turn = self.board.is_my_turn
             self.board.is_my_turn = (slot_id == self.board.my_slot_id)
             self.last_action_timestamp = time.time()
@@ -1514,7 +1520,7 @@ class JieqiCupBot:
             self._moves_len_at_turn_start = len(self.board.uci_moves)
             if not was_my_turn:
                 print(f"[TURN] My turn | uci={len(self.board.uci_moves)} "
-                      f"| timeout={turn_timeout}s", flush=True)
+                      f"| side={turn_side} | timeout={turn_timeout}s", flush=True)
             threading.Thread(target=self._make_auto_move, daemon=True).start()
         except Exception as e:
             print(f"[SET_TURN ERROR] {e}")
