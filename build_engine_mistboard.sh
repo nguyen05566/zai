@@ -20,8 +20,18 @@ if [ ! -s "$ROOT/pikafish.nnue" ]; then
   TMP_EXTRACT="${TMPDIR:-/tmp}/pikafish-nnue"
   curl -fsSL "https://github.com/official-pikafish/Pikafish/releases/download/Pikafish-2026-09-06/Pikafish.2026-09-06.7z" -o "$TMP_ARCHIVE"
   rm -rf "$TMP_EXTRACT" && mkdir -p "$TMP_EXTRACT"
-  unrar x -y "$TMP_ARCHIVE" "$TMP_EXTRACT/" >/dev/null
-  cp "$TMP_EXTRACT/pikafish.nnue" "$ROOT/pikafish.nnue"
+  # The release archive format has varied; do not let an unsuccessful first
+  # extractor abort the workflow. Try both tools, then locate the net.
+  unrar x -y "$TMP_ARCHIVE" "$TMP_EXTRACT/" >/dev/null 2>&1 || true
+  if [ ! -s "$TMP_EXTRACT/pikafish.nnue" ]; then
+    7z x -y "$TMP_ARCHIVE" "-o$TMP_EXTRACT" >/dev/null 2>&1 || true
+  fi
+  NNUE_FOUND=$(find "$TMP_EXTRACT" -type f -name 'pikafish.nnue' -print -quit)
+  if [ -z "$NNUE_FOUND" ]; then
+    echo "Could not extract pikafish.nnue from $TMP_ARCHIVE" >&2
+    exit 1
+  fi
+  cp "$NNUE_FOUND" "$ROOT/pikafish.nnue"
 fi
 
 echo "Built $ROOT/pikajieqi-mistboard using ref $REF"
