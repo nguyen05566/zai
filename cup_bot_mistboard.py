@@ -683,7 +683,10 @@ class MistboardJieqiEngine:
                 _threads = max(1, min(2, (os.cpu_count() or 2) - 1))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
                 self.proc.stdin.write("setoption name Hash value 128\n")
-                self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
+                # Mistboard's pinned classical jieqi_old build does not require
+                # an NNUE file. Use it only when the optional net is present.
+                if os.path.isfile(nnue_path):
+                    self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
                 self.proc.stdin.write("isready\n")
                 self.proc.stdin.flush()
@@ -1390,14 +1393,25 @@ class JieqiCupBot:
                 if not UCI_MOVE_RE.match(engine_move):
                     self._move_error_count += 1
                     return
-                rest = list(msg.data[msg.offset:]) if msg.offset < len(msg.data) else []
+                # ws_frame_dump is the single wire-decoding source. The
+                # message reader above only advances the protocol offset;
+                # reveal decoding comes from the shared MOVE event.
+                event = getattr(self, "_decoded_ws_event", None) or {}
+                event_source = event.get("source")
+                event_target = event.get("target")
+                if event_source != source_pos or event_target != target_pos:
+                    raise ValueError(
+                        f"MOVE parser mismatch: wire={source_pos}->{target_pos} "
+                        f"dump={event_source}->{event_target}"
+                    )
                 mover_dark = source_pos in self.board.dark_positions
                 is_flip_move = (source_pos == target_pos)
-                revealed_char = None
-                if (mover_dark or is_flip_move) and rest and rest[0] > 0 and len(rest) >= 3:
-                    cand = self._sid_to_fen_char(rest[2])
-                    if cand and cand not in ('k', 'K'):
-                        revealed_char = cand
+                revealed_char = event.get("revealed_piece")
+                if revealed_char in ('k', 'K'):
+                    revealed_char = None
+                if revealed_char and not (mover_dark or is_flip_move):
+                    print(f"[MOVE] parser reveal on open square: {revealed_char}", flush=True)
+                    revealed_char = None
                 self.board.dark_positions.discard(source_pos)
                 self.board.dark_positions.discard(target_pos)
                 full_uci = engine_move + (revealed_char or "")
