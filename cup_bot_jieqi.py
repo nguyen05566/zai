@@ -119,7 +119,7 @@ KICK_MODE = "never"
 KICK_DELAY = 5.0
 SIT_ALONE_TIMEOUT = 300.0
 
-BOT_BET_XU = 20000
+BOT_BET_XU = 1000
 BOT_USE_CREATE_TABLE = True
 BOT_MATCH_DURATION = '5'
 BOT_TURN_DURATION = '30'
@@ -673,9 +673,26 @@ class JieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            cmd = "position startpos"
-            if moves:
-                cmd += " moves " + " ".join(moves)
+            # ★ SEND STANDARD FEN (no BAG, no X/x — all pieces visible)
+            # Strip BAG if present in FEN
+            fen_parts = fen.split()
+            fen_board = fen_parts[0] if fen_parts else fen
+            fen_side = 'w'
+            for p in fen_parts[1:]:
+                if p in ('w', 'b'):
+                    fen_side = p
+                    break
+            clean_fen = f"{fen_board} {fen_side} - - 0 1"
+            
+            # ★ STRIP reveal suffixes from moves (not needed — all pieces known)
+            clean_moves = []
+            for m in moves:
+                if len(m) >= 4:
+                    clean_moves.append(m[:4])  # Take only first 4 chars (e.g., "c3c4" from "c3c4N")
+            
+            cmd = f"position fen {clean_fen}"
+            if clean_moves:
+                cmd += " moves " + " ".join(clean_moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -1248,7 +1265,9 @@ class JieqiCupBot:
         for sid, face, position, is_open in pieces:
             if position < 0 or position >= 90: continue
             fen_row, col = self.board.pos_to_rc(position)
-            if is_open and len(face) > 1:
+            # ★ SEE ALL PIECES: use decoded face for ALL pieces (even hidden)
+            # Server sends raw_face = actual piece type for every piece
+            if len(face) > 1:
                 color = face[0]; piece_type = int(face[1])
                 type_to_fen = {1: 'k', 2: 'a', 3: 'b', 4: 'r',
                                5: 'c', 6: 'n', 7: 'p'}
