@@ -800,6 +800,12 @@ class JieqiCupBot:
     def _on_message(self, ws, message):
         self.last_recv_timestamp = time.time()
         if isinstance(message, bytes):
+            # ★ WS frame dump: log all incoming binary frames
+            try:
+                from ws_frame_dump import log_incoming_frame
+                log_incoming_frame(message)
+            except Exception:
+                pass
             self._handle_binary_message(message)
 
     def _on_error(self, ws, error):
