@@ -103,10 +103,7 @@ GAME_ID = 'mystery_xiangqi'
 PLACE_PATH = 'Lobby.mystery_xiangqi.0'
 
 # === ENGINE CONFIG ===
-# pikajieqi-native (cppjieqi wrapper) — C++ native, no wine needed
 PIKAJIEQI_BINARY_CANDIDATES = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikajieqi-native"),
 ]
 
@@ -118,7 +115,6 @@ TRUST_ENGINE_AFTER = 100
 MAX_ENGINE_RESTARTS_PER_GAME = 2
 MOVE_DEDUP_WINDOW = 0.1
 
-# [ĐÃ VÔ HIỆU HÓA] Giữ biến để tương thích, nhưng không còn dùng để kick/leave
 KICK_MODE = "never"
 KICK_DELAY = 5.0
 SIT_ALONE_TIMEOUT = 300.0
@@ -284,12 +280,13 @@ def fetch_session_info():
         tm = re.search(r"var\s+token\s*=\s*(-?\d+)", page_html)
         if not tm: return False
         TOKEN = int(tm.group(1))
-        nm = re.search(r"var\s+currentPlayerNickName\s*=\s*["']([^"']+)["']", page_html)
+        # FIX: Dùng raw string với dấu nháy đơn để tránh lỗi cú pháp
+        nm = re.search(r'var\s+currentPlayerNickName\s*=\s*["\']([^"\']+)["\']', page_html)
         if not nm: return False
         CURRENT_PLAYER_NICKNAME = nm.group(1).strip()
         pid = re.search(r"var\s+currentPlayerId\s*=\s*(\d+)", page_html)
         if pid: CURRENT_PLAYER_ID = int(pid.group(1))
-        pm = re.search(r"var\s+placePath\s*=\s*["']([^"']+)["']", page_html)
+        pm = re.search(r'var\s+placePath\s*=\s*["\']([^"\']+)["\']', page_html)
         if pm: PLACE_PATH = pm.group(1)
         try:
             cookie_parts = [f"{c.name}={c.value}" for c in session.cookies]
@@ -519,7 +516,6 @@ class XiangqiBoardTracker:
         return True, "ok"
 
 class JieqiEngine:
-    """Wrapper quanh PikaJieQi Linux native binary."""
     def __init__(self):
         self.proc = None
         self.binary_path = None
@@ -723,7 +719,6 @@ class JieqiEngine:
         return self._latest_bestmove
 
 class JieqiCupBot:
-    """Bot cờ úp dùng Jieqi engine — KHÔNG KICK/LEAVE khi thua."""
     def __init__(self):
         self.conn = Conn()
         self.board = XiangqiBoardTracker()
@@ -778,7 +773,6 @@ class JieqiCupBot:
         else:
             print("[BOT] ✅ Engine ready")
 
-    # ==================== WEBSOCKET ====================
     def connect(self):
         import websocket
         self.connected = False
@@ -958,7 +952,6 @@ class JieqiCupBot:
         data.extend(self.conn.pack_byte(is_ready))
         self.send_message("SET_READY", bytes(data))
 
-    # ==================== RECEIVE MESSAGES ====================
     def _handle_binary_message(self, data):
         cmd_for_log = "?"
         try:
@@ -1385,9 +1378,6 @@ class JieqiCupBot:
         self.in_game = False; self._joining_table = False
         self._table_path = None; self.board.reset()
 
-    # =====================================================================
-    # [ĐÃ SỬA] _handle_gameover: KHÔNG KICK, KHÔNG LEAVE — luôn ở lại bàn
-    # =====================================================================
     def _handle_gameover(self, msg):
         my_result, results = None, {}
         try:
@@ -1416,12 +1406,11 @@ class JieqiCupBot:
               f"err={self._move_error_count} reject={self._play_reject_count}",
               flush=True)
 
-        # === Reset trạng thái ván đấu (giữ nguyên) ===
         self.board.is_playing = False
         self.board.is_my_turn = False
         self.fixed_pawn_positions.clear()
         self.board.reset()
-        self.in_game = True                # <<< QUAN TRỌNG: vẫn coi như đang ở bàn
+        self.in_game = True
         self._joining_table = False
         self.last_action_timestamp = time.time()
         self._thinking = False
@@ -1429,7 +1418,6 @@ class JieqiCupBot:
         self._turn_started_at = 0.0
         self._turn_deadline = 0.0
 
-        # Báo engine bắt đầu ván mới
         if self.engine and self.engine.alive():
             try:
                 with self.engine.engine_lock:
@@ -1438,7 +1426,6 @@ class JieqiCupBot:
             except Exception:
                 pass
 
-        # === [ĐÃ SỬA] Luôn ở lại bàn, không kick, không rời bàn ===
         def after_gameover():
             print("[GAME] 🔄 Ở lại bàn, sẵn sàng cho ván mới (không kick / không rời)...")
             time.sleep(3.0)
@@ -1447,7 +1434,6 @@ class JieqiCupBot:
 
         threading.Thread(target=after_gameover, daemon=True).start()
 
-    # ==================== TÍNH NƯỚC ====================
     def _make_auto_move(self):
         if not self.board.is_my_turn or not self.board.is_playing: return
         if self._thinking: return
@@ -1527,7 +1513,6 @@ class JieqiCupBot:
                 if self.connected: self.send_message("PING")
         threading.Thread(target=loop, daemon=True).start()
 
-    # ==================== VÒNG LẶP CHÍNH ====================
     def run(self):
         print("[BOT] Khởi chạy cờ úp Jieqi v1.1 (stay-on-lose)...")
         while True:
@@ -1568,7 +1553,6 @@ class JieqiCupBot:
                     self.start_keep_alive()
                     time.sleep(2)
 
-                # Deadline watchdog
                 if (self.board.is_playing and self.board.is_my_turn
                         and self._turn_deadline > 0
                         and time.time() > self._turn_deadline - 4.0
@@ -1600,7 +1584,6 @@ class JieqiCupBot:
                     self._enter_fail_at = 0.0
                     self.leave_table()
 
-                # Chỉ tìm/tạo bàn mới khi KHÔNG đang ở bàn nào
                 if (self.connected and self.logged_in and not self.in_game
                         and not self._joining_table):
                     now = time.time()
