@@ -12,8 +12,13 @@ Tự restart engine khi cần
 [BẢN SỬA 3] Dùng `position fen` với BAG string + FEN động (flip + side-to-move).
 
 [BẢN SỬA 4] FIX bug NotYourPiece:
-- Restore dark_positions SAU set_base (trước đây bị xóa → FEN thiếu X/x)
-- Thêm log [FEN-BUILD] để verify FEN có đủ X/x cho quân úp
+- Restore dark_positions SAU set_base
+- Thêm log [FEN-BUILD] để verify FEN có đủ X/x
+
+[BẢN SỬA 5] FIX capture tracking:
+- visible_board.apply_move trả về captured_pos
+- Discard dark_positions khi quân bị ăn
+- Update visible_board với reveal char khi quân lật
 """
 import struct
 import threading
@@ -399,6 +404,7 @@ UCI_MOVE_WITH_SUFFIX_RE = re.compile(r'^[a-i]\d[a-i]\d[a-zA-Z]?$')
 
 TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
 
+
 class XiangqiBoardTracker:
     INITIAL_FEN = "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w"
 
@@ -472,15 +478,8 @@ class XiangqiBoardTracker:
                 bag[ch] = max(0, bag[ch] - 1)
         return "".join(f"{k}{bag[k]}" for k in BAG_ORDER)
 
-    # ★ SỬA 3+4: Build FEN động với log debug
     def get_current_fen(self, visible_board):
-        """Build FEN cờ úp cho vị trí HIỆN TẠI, đã tính flip + side-to-move.
-        
-        Format: <board_fen> <bag_string> <side_to_move> - - 0 1
-        - Board: quân úp = X (Đỏ) / x (Đen), quân lật = tên thật
-        - BAG: số quân CHƯA LẬT còn lại
-        - side_to_move: 'w' (Đỏ) hoặc 'b' (Đen) — bên sắp đi
-        """
+        """Build FEN cờ úp cho vị trí HIỆN TẠI, đã tính flip + side-to-move."""
         board = [['.' for _ in range(9)] for _ in range(10)]
         n_masked = 0
         for pos, cell in enumerate(visible_board.cells):
@@ -489,7 +488,6 @@ class XiangqiBoardTracker:
             fen_row, col = self.pos_to_rc(pos)
             if not (0 <= fen_row < 10 and 0 <= col < 9):
                 continue
-            # Nếu pos vẫn còn úp → dùng X/x (giữ màu từ cell)
             if pos in self.dark_positions:
                 fen_char = 'X' if cell.isupper() else 'x'
                 n_masked += 1
@@ -516,7 +514,6 @@ class XiangqiBoardTracker:
         side = self.side_to_move
         fen = f"{board_fen} {bag} {side} - - 0 1"
         moves = [m for m in self.uci_moves if UCI_MOVE_WITH_SUFFIX_RE.match(m)]
-        # ★ SỬA 4: log debug
         n_X = board_fen.count('X') + board_fen.count('x')
         print(f"[FEN-BUILD] dark={len(self.dark_positions)} | masked={n_masked} | "
               f"X/x={n_X} | side={side} | bag={bag[:20]}...", flush=True)
@@ -596,7 +593,7 @@ class XiangqiBoardTracker:
 
 
 class VisibleBoard:
-    """Tracks actual piece positions."""
+    """Tracks actual piece positions với khả năng detect capture."""
     TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
 
     def __init__(self):
@@ -620,10 +617,23 @@ class VisibleBoard:
                     fen_char = fen_char.upper()
                 self.cells[position] = fen_char
 
+    # ★ SỬA 5: Trả về captured_pos nếu có quân bị ăn
     def apply_move(self, source_pos, target_pos):
-        if 0 <= source_pos < 90 and 0 <= target_pos < 90:
-            self.cells[target_pos] = self.cells[source_pos]
-            self.cells[source_pos] = '.'
+        """Di chuyển quân từ source → target.
+        Returns:
+            captured_pos (int|None): vị trí quân bị ăn, None nếu ô trống
+        """
+        if not (0 <= source_pos < 90 and 0 <= target_pos < 90):
+            return None
+        captured_pos = target_pos if self.cells[target_pos] != '.' else None
+        self.cells[target_pos] = self.cells[source_pos]
+        self.cells[source_pos] = '.'
+        return captured_pos
+
+    def set_cell(self, pos, fen_char):
+        """Set trực tiếp 1 ô (dùng khi quân lật)."""
+        if 0 <= pos < 90:
+            self.cells[pos] = fen_char
 
     def flip_side(self):
         self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
@@ -779,9 +789,7 @@ class JieqiEngine:
         self._init_engine()
         return self.alive()
 
-    # ★ SỬA 3: Dùng position fen + banmoves
     def get_best_move(self, fen, moves, movetime_ms=3000, banmoves=None):
-        """Gửi position fen (có BAG) cho PikaJieQi."""
         if not self.alive():
             if not self.restart():
                 return None
@@ -1345,17 +1353,16 @@ class JieqiCupBot:
             self.visible_board.set_from_pieces(board_pieces, self.board.flip)
             self.visible_board.side_to_move = 'w'
 
-            # ★ SỬA 3+4: Set base TRƯỚC, rồi restore dark_positions + true_faces
+            # ★ Set base TRƯỚC
             _first_side = 'w' if first_turn_slot_id == 0 else 'b'
             self.board.set_base(_built_fen, _first_side)
-            # ★ SỬA 4: Restore CẢ dark_positions VÀ true_faces sau set_base
+
+            # ★ Restore dark_positions + true_faces sau set_base
             for sid, face, position, is_open in board_pieces:
                 if position < 0 or position >= 90:
                     continue
-                # ★ Restore dark_positions
                 if not is_open:
                     self.board.dark_positions.add(position)
-                # ★ Restore true_faces
                 if len(face) > 1:
                     color = face[0]
                     piece_type = int(face[1])
@@ -1363,7 +1370,6 @@ class JieqiCupBot:
                     if color == 'r':
                         fen_char = fen_char.upper()
                     self.board.set_true_face(position, fen_char)
-                # Đánh dấu tốt cố định
                 piece_type = int(face[1]) if len(face) > 1 else 0
                 if piece_type == 7 and position not in STANDARD_PAWN_POSITIONS:
                     self.fixed_pawn_positions.add(position)
@@ -1377,7 +1383,6 @@ class JieqiCupBot:
             if self.fixed_pawn_positions:
                 print(f"[GAME] 🛡️ {len(self.fixed_pawn_positions)} locked pawns")
 
-            # ★ SỬA 4: Verify FEN có X/x
             _init_fen, _ = self.board.get_current_fen(self.visible_board)
             print(f"[START] BAG={self.board.bag_string()}")
             print(f"[START] dark={len(self.board.dark_positions)} | "
@@ -1465,8 +1470,11 @@ class JieqiCupBot:
                     if not revealed_char:
                         self.board.revealed_chars.append(captured_face_known)
 
+                # ★ Update dark_positions
                 self.board.dark_positions.discard(source_pos)
                 self.board.dark_positions.discard(target_pos)
+
+                # ★ Update true_faces
                 self.board.move_true_face(source_pos, target_pos)
 
                 full_uci = engine_move + (revealed_char or "")
@@ -1476,10 +1484,18 @@ class JieqiCupBot:
                     self._move_skip_count += 1
                     return
                 self.board.record_move(engine_move, revealed_char)
-                # ★ Update visible board
+
+                # ★ SỬA 5: Update visible_board với capture tracking
                 src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
-                self.visible_board.apply_move(src_pos, tgt_pos)
+                captured_visible = self.visible_board.apply_move(src_pos, tgt_pos)
+                if captured_visible is not None:
+                    # Quân ở tgt_pos bị ăn → xóa khỏi dark_positions
+                    self.board.dark_positions.discard(captured_visible)
+                # Nếu quân đi LẬT → set face thật cho ô đích
+                if revealed_char:
+                    self.visible_board.set_cell(tgt_pos, revealed_char)
                 self.visible_board.flip_side()
+
                 self._last_move_uci = full_uci
                 self._last_move_time = now
                 self._played_this_turn = False
@@ -1488,7 +1504,8 @@ class JieqiCupBot:
                       f"revealed={len(self.board.revealed_chars)} "
                       f"| BAG={self.board.bag_string()} "
                       f"| side={self.board.side_to_move} "
-                      f"| dark={len(self.board.dark_positions)}", flush=True)
+                      f"| dark={len(self.board.dark_positions)} "
+                      f"| captured={captured_visible}", flush=True)
             except Exception as e:
                 self._move_error_count += 1
                 print(f"[MOVE ERROR] err={e}", flush=True)
@@ -1527,7 +1544,6 @@ class JieqiCupBot:
             was_my_turn = self.board.is_my_turn
             self.board.is_my_turn = (slot_id == self.board.my_slot_id)
 
-            # ★ SỬA 3: Cập nhật side_to_move theo slot_id
             if slot_id == self.board.first_turn_slot_id:
                 self.board.side_to_move = 'w'
             else:
@@ -1645,7 +1661,6 @@ class JieqiCupBot:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
         movetime_ms = 3000
-        # ★ SỬA 3: Build FEN động
         fen, moves = self.board.get_current_fen(self.visible_board)
         print(f"[ENGINE-IN] FEN: {fen}", flush=True)
         print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
@@ -1655,7 +1670,6 @@ class JieqiCupBot:
               f"my_slot={self.board.my_slot_id} | first={self.board.first_turn_slot_id} | "
               f"dark={len(self.board.dark_positions)}", flush=True)
 
-        # ★ SỬA 3: Truyền banmoves
         banmoves = list(self._rejected_moves) if self._rejected_moves else None
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms,
                                         banmoves=banmoves)
@@ -1706,7 +1720,7 @@ class JieqiCupBot:
         threading.Thread(target=loop, daemon=True).start()
 
     def run(self):
-        print("[BOT] Khởi chạy cờ úp Jieqi v1.4 (position fen + FIX NotYourPiece)...")
+        print("[BOT] Khởi chạy cờ úp Jieqi v1.5 (position fen + capture tracking)...")
         while True:
             try:
                 now_ts = time.time()
