@@ -128,6 +128,12 @@ BOT_TURN_DURATION = '30'
 BOT_ACC_DURATION = '0'
 BOT_BLOCK_SOFTWARE = '0'
 
+# === TIME MANAGEMENT (tong 5 phut/van, toi da 20s/nuoc) ===
+MATCH_CLOCK_SECONDS = float(BOT_MATCH_DURATION) * 60.0   # dong ho tong moi ben
+MAX_THINK_SECONDS = 20.0         # tran nghi cung 1 nuoc
+CLOCK_SAFETY_SECONDS = 5.0       # khong dip duoi vung an toan cuoi dong ho
+CLOCK_CHARGE_CLAMP_SECONDS = 60.0  # chong lag lam mat dong ho ao
+
 VN_TEN_DAU = [
     "Tuấn ",  "Minh ",  "Đức ",  "Hoàng ",  "Huy ",  "Hùng ",  "Dũng ",  "Cường ",  "Long ",  "Nam ",
     "Sơn ",  "Hải ",  "Phong ",  "Thắng ",  "Trung ",  "Kiên ",  "Quân ",  "Thanh ",  "Đạt ",  "Khoa ",
@@ -737,7 +743,14 @@ class MistboardJieqiEngine:
         self._init_engine()
         return self.alive()
 
-    def get_best_move(self, fen, moves, movetime_ms=2000):
+    def get_best_move(self, fen, moves, movetime_ms=2000,
+                      wtime_ms=None, btime_ms=None, cap_seconds=None):
+        """Tim bestmove.
+
+        wtime_ms/btime_ms: dong ho co (ms) de engine TU phan bo thoi gian
+        (go wtime/btime). cap_seconds: tran cung -> force stop khi vuot.
+        wtime_ms=None -> dung flow cu (go infinite + movetime_ms).
+        """
         if not self.alive():
             if not self.restart():
                 return None
@@ -745,6 +758,7 @@ class MistboardJieqiEngine:
         self._engine_searching = True
         with self._lines_lock:
             self._stdout_lines.clear()
+        use_clock = wtime_ms is not None
         try:
             # ★ Use "position startpos moves ..." — PikaJieQi's native format
             # PikaJieQi auto-tracks BAG and dark piece reveals from move suffixes
@@ -753,15 +767,68 @@ class MistboardJieqiEngine:
             cmd = "position startpos"
             if moves:
                 cmd += " moves " + " ".join(moves)
+            if use_clock:
+                go_cmd = f"go wtime {int(wtime_ms)} btime {int(btime_ms)}"
+            else:
+                go_cmd = "go infinite"
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
-                self.proc.stdin.write("go infinite\n")
+                self.proc.stdin.write(go_cmd + "\n")
                 self.proc.stdin.flush()
         except Exception as e:
             print(f"[ENGINE] Send error: {e}")
             self._engine_searching = False
             return None
+
+        def _parse_info():
+            with self._lines_lock:
+                for l in reversed(self._stdout_lines):
+                    if l.startswith("info") and "depth" in l:
+                        m = re.search(r'depth (\d+)', l)
+                        if m: self._last_depth = m.group(1)
+                        sm = re.search(r'score (cp|mate) (-?\d+)', l)
+                        if sm:
+                            if sm.group(1) == "mate":
+                                self._last_score = f"M{sm.group(2)}"
+                            else:
+                                self._last_score = f"{int(sm.group(2))/100:+.2f}"
+                        break
+
+        if use_clock:
+            # Engine tu dung theo phan bo cua no; poll de nhan bestmove som.
+            cap = float(cap_seconds) if cap_seconds else 20.0
+            t0 = time.time()
+            while time.time() - t0 < cap:
+                if self._latest_bestmove:
+                    self._engine_searching = False
+                    _parse_info()
+                    return self._latest_bestmove
+                if not self.alive():
+                    self._engine_searching = False
+                    return None
+                time.sleep(0.02)
+            # Vuot tran cap -> force stop
+            try:
+                with self.engine_lock:
+                    self.proc.stdin.write("stop\n")
+                    self.proc.stdin.flush()
+            except Exception:
+                pass
+            t1 = time.time()
+            while time.time() - t1 < 3.0:
+                if self._latest_bestmove:
+                    self._engine_searching = False
+                    _parse_info()
+                    return self._latest_bestmove
+                if not self.alive():
+                    break
+                time.sleep(0.02)
+            print("[ENGINE] bestmove timeout after cap stop")
+            self._engine_searching = False
+            return self._latest_bestmove
+
+        # Legacy flow: go infinite + movetime_ms roi stop
         time.sleep(movetime_ms / 1000.0)
         try:
             with self.engine_lock:
@@ -774,26 +841,16 @@ class MistboardJieqiEngine:
         while time.time() - t0 < timeout:
             if self._latest_bestmove:
                 self._engine_searching = False
-                with self._lines_lock:
-                    for l in reversed(self._stdout_lines):
-                        if l.startswith("info") and "depth" in l:
-                            m = re.search(r'depth (\d+)', l)
-                            if m: self._last_depth = m.group(1)
-                            sm = re.search(r'score (cp|mate) (-?\d+)', l)
-                            if sm:
-                                if sm.group(1) == "mate":
-                                    self._last_score = f"M{sm.group(2)}"
-                                else:
-                                    self._last_score = f"{int(sm.group(2))/100:+.2f}"
-                            break
+                _parse_info()
                 return self._latest_bestmove
             if not self.alive():
                 self._engine_searching = False
                 return None
             time.sleep(0.02)
-        print(f"[ENGINE] bestmove timeout after stop")
+        print("[ENGINE] bestmove timeout after stop")
         self._engine_searching = False
         return self._latest_bestmove
+
 
 class JieqiCupBot:
     def __init__(self):
@@ -839,6 +896,9 @@ class JieqiCupBot:
         self._move_lock = threading.Lock()
         self._last_move_uci = None
         self._last_move_time = 0.0
+        self._my_clock_s = MATCH_CLOCK_SECONDS
+        self._opp_clock_s = MATCH_CLOCK_SECONDS
+        self._last_move_at = 0.0
         self._move_recv_count = 0
         self._move_skip_count = 0
         self._move_error_count = 0
@@ -1245,6 +1305,9 @@ class JieqiCupBot:
         self._move_error_count = 0
         self._last_move_uci = None
         self._last_move_time = 0.0
+        self._my_clock_s = MATCH_CLOCK_SECONDS
+        self._opp_clock_s = MATCH_CLOCK_SECONDS
+        self._last_move_at = time.time()
         self.board.reset()
         self.fixed_pawn_positions.clear()
         self.board.is_playing = True
@@ -1420,6 +1483,17 @@ class JieqiCupBot:
                         and (now - self._last_move_time) < MOVE_DEDUP_WINDOW):
                     self._move_skip_count += 1
                     return
+                # ★ Chess-clock: tru thoi gian cua ben vua di (tu MOVE truoc)
+                if self._last_move_at > 0:
+                    _elapsed = min(now - self._last_move_at,
+                                   CLOCK_CHARGE_CLAMP_SECONDS)
+                    _mover_is_me = ((self.board.side_to_move == 'w')
+                                    == self.board.is_red)
+                    if _mover_is_me:
+                        self._my_clock_s -= _elapsed
+                    else:
+                        self._opp_clock_s -= _elapsed
+                self._last_move_at = now
                 self.board.record_move(engine_move, revealed_char)
                 # ★ Update visible board
                 src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
@@ -1477,7 +1551,8 @@ class JieqiCupBot:
             self._moves_len_at_turn_start = len(self.board.uci_moves)
             if not was_my_turn:
                 print(f"[TURN] My turn | uci={len(self.board.uci_moves)} "
-                      f"| timeout={turn_timeout}s", flush=True)
+                      f"| timeout={turn_timeout}s | clock={self._my_clock_s:.0f}s",
+                      flush=True)
             threading.Thread(target=self._make_auto_move, daemon=True).start()
         except Exception as e:
             print(f"[SET_TURN ERROR] {e}")
@@ -1579,16 +1654,31 @@ class JieqiCupBot:
         if remain < 4.0:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
-        movetime_ms = 3000
         fen, moves = self.board.get_current_fen()
+        # ★ Time management: dong ho tong 5 phut, engine tu phan bo qua go
+        # wtime/btime; tran cung MAX_THINK_SECONDS va khong cham vung an toan.
+        _my_ms = int(max(0.0, self._my_clock_s) * 1000)
+        _opp_ms = int(max(0.0, self._opp_clock_s) * 1000)
+        _cap_s = min(MAX_THINK_SECONDS,
+                     max(0.5, remain - 5.0),
+                     max(0.5, self._my_clock_s - CLOCK_SAFETY_SECONDS))
+        if self.board.is_red:
+            _w_ms, _b_ms = _my_ms, _opp_ms
+        else:
+            _w_ms, _b_ms = _opp_ms, _my_ms
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
-        print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
+        print(f"[ENGINE-IN] moves({len(moves)}) | clock me={self._my_clock_s:.1f}s "
+              f"opp={self._opp_clock_s:.1f}s | cap={_cap_s:.1f}s remain={remain:.1f}s",
               flush=True)
-        raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
+        raw = self.engine.get_best_move(fen, moves,
+                                        wtime_ms=_w_ms, btime_ms=_b_ms,
+                                        cap_seconds=_cap_s)
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
-                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
+                raw = self.engine.get_best_move(fen, moves,
+                                                wtime_ms=_w_ms, btime_ms=_b_ms,
+                                                cap_seconds=_cap_s)
             if not raw:
                 print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True)
                 return
