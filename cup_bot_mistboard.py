@@ -2,17 +2,9 @@
 cup_bot_mistboard.py — Cờ Úp Bot dùng bản PikaJieQi build theo Mistboard
 Khác biệt vs cup_bot.py:
 Engine: pikajieqi-mistboard (C++ native, không cần wine)
-Movetime: 3000ms (~3s/nước)
-Engine dùng 'go infinite' + 'stop' (engine này KHÔNG hỗ trợ 'go movetime')
+Movetime: 2000ms (~2s/nước cho nhanh)
+Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork-and-think)
 BAG updates: gửi kèm moves list để Jieqi sync state
-
-[BẢN SỬA — Phương án B]
-- Không clear _stdout_lines → không mất bestmove
-- Seq tracking bestmove → không nhầm bestmove cũ
-- Timeout chờ bestmove 5s (thay vì 2s)
-- MIN_MOVE_SECONDS tính từ lúc engine bắt đầu (thay vì từ SET_TURN)
-- Log chẩn đoán khi timeout
-- MAX_ENGINE_RESTARTS_PER_GAME = 5
 
 [BẢN SỬA] Bot KHÔNG tự kick/Thoát khi thua — luôn ở lại bàn và ready ván mới.
 """
@@ -122,10 +114,8 @@ MIN_MOVE_SECONDS = 3.0
 MOVE_DEADLINE_SECONDS = 30.0
 MAX_SAFE_MOVES = 250
 TRUST_ENGINE_AFTER = 100
-MAX_ENGINE_RESTARTS_PER_GAME = 5
+MAX_ENGINE_RESTARTS_PER_GAME = 2
 MOVE_DEDUP_WINDOW = 0.1
-ENGINE_MOVETIME_MS = 3000
-ENGINE_BESTMOVE_TIMEOUT = 5.0   # ★ timeout chờ bestmove sau stop
 
 KICK_MODE = "never"
 KICK_DELAY = 5.0
@@ -292,6 +282,7 @@ def fetch_session_info():
         tm = re.search(r"var\s+token\s*=\s*(-?\d+)", page_html)
         if not tm: return False
         TOKEN = int(tm.group(1))
+        # FIX: Dùng raw string với dấu nháy đơn để tránh lỗi cú pháp
         nm = re.search(r'var\s+currentPlayerNickName\s*=\s*["\']([^"\']+)["\']', page_html)
         if not nm: return False
         CURRENT_PLAYER_NICKNAME = nm.group(1).strip()
@@ -527,40 +518,54 @@ class XiangqiBoardTracker:
         return True, "ok"
 
 class VisibleBoard:
+    """Tracks actual piece positions for 'see-all' mode.
+    
+    Maintains a 90-cell board with actual piece types (from raw_face).
+    Used to generate standard xiangqi FEN for the engine.
+    """
     TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
-
+    
     def __init__(self):
-        self.cells = ['.'] * 90
+        self.cells = ['.'] * 90  # 90 positions, '.' = empty
         self.side_to_move = 'w'
-
+        
     def reset(self):
         self.cells = ['.'] * 90
         self.side_to_move = 'w'
-
+    
     def set_from_pieces(self, pieces, flip):
+        """Set board from START_MATCH pieces list.
+        pieces: [(sid, face, position, is_open), ...]
+        flip: board flip state (from XiangqiBoardTracker)
+        """
         self.cells = ['.'] * 90
         for sid, face, position, is_open in pieces:
             if position < 0 or position >= 90:
                 continue
             if len(face) >= 2:
-                color = face[0]
+                color = face[0]  # 'r' or 'b'
                 piece_type = int(face[1])
                 fen_char = self.TYPE_TO_FEN.get(piece_type, '?')
                 if color == 'r':
                     fen_char = fen_char.upper()
                 self.cells[position] = fen_char
-
+    
     def apply_move(self, source_pos, target_pos):
+        """Move a piece from source to target."""
         if 0 <= source_pos < 90 and 0 <= target_pos < 90:
             self.cells[target_pos] = self.cells[source_pos]
             self.cells[source_pos] = '.'
-
+    
     def flip_side(self):
         self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
-
+    
     def to_fen(self, flip=False):
+        """Convert to FEN string.
+        Server positions: pos = row * 9 + col (row 0 = RED bottom, row 9 = BLACK top)
+        FEN format: row 9 first (top), row 0 last (bottom)
+        """
         rows = []
-        for board_row in range(9, -1, -1):
+        for board_row in range(9, -1, -1):  # row 9 → row 0
             fen_str = ""
             empty = 0
             for col in range(9):
@@ -579,9 +584,6 @@ class VisibleBoard:
         return '/'.join(rows) + ' ' + self.side_to_move + ' - - 0 1'
 
 
-# ============================================================================
-# ENGINE — dùng 'go infinite' + 'stop' (Mistboard KHÔNG hỗ trợ movetime)
-# ============================================================================
 class MistboardJieqiEngine:
     def __init__(self):
         self.proc = None
@@ -595,9 +597,6 @@ class MistboardJieqiEngine:
         self._restart_count = 0
         self._stdout_lines = []
         self._lines_lock = threading.Lock()
-        # ★ Seq tracking — chỉ nhận bestmove của lần gọi hiện tại
-        self._bestmove_seq = 0
-        self._bestmove_seen_seq = -1
         for path in PIKAJIEQI_BINARY_CANDIDATES:
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 self.binary_path = path
@@ -659,14 +658,11 @@ class MistboardJieqiEngine:
                 with self._lines_lock:
                     self._stdout_lines.append(line)
                     if len(self._stdout_lines) > 200:
-                        # ★ Chỉ trim, KHÔNG clear sạch
                         self._stdout_lines = self._stdout_lines[-100:]
                 if line == "readyok":
                     self._readyok = True
                 if line.startswith("bestmove"):
-                    with self._lines_lock:
-                        self._latest_bestmove = line
-                        self._bestmove_seen_seq = self._bestmove_seq
+                    self._latest_bestmove = line
                     self._engine_searching = False
         threading.Thread(target=consume_stdout, args=(self.proc,), daemon=True).start()
 
@@ -687,6 +683,8 @@ class MistboardJieqiEngine:
                 _threads = max(1, min(2, (os.cpu_count() or 2) - 1))
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
                 self.proc.stdin.write("setoption name Hash value 128\n")
+                # Mistboard's pinned classical jieqi_old build does not require
+                # an NNUE file. Use it only when the optional net is present.
                 if os.path.isfile(nnue_path):
                     self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
                 self.proc.stdin.write("setoption name MultiPV value 1\n")
@@ -699,7 +697,7 @@ class MistboardJieqiEngine:
             print("[ENGINE] ❌ readyok timeout")
             self._kill()
             return
-        print("[ENGINE] ✅ pikajieqi-mistboard ready (go infinite + stop)")
+        print("[ENGINE] ✅ pikajieqi-mistboard ready")
 
     def _wait_for_line(self, prefix, timeout=10):
         t0 = time.time()
@@ -739,46 +737,19 @@ class MistboardJieqiEngine:
         self._init_engine()
         return self.alive()
 
-    def _parse_info(self):
-        """Parse depth/score từ dòng info gần nhất."""
-        with self._lines_lock:
-            for l in reversed(self._stdout_lines):
-                if l.startswith("info") and "depth" in l:
-                    m = re.search(r'depth (\d+)', l)
-                    if m:
-                        self._last_depth = m.group(1)
-                    sm = re.search(r'score (cp|mate) (-?\d+)', l)
-                    if sm:
-                        if sm.group(1) == "mate":
-                            self._last_score = f"M{sm.group(2)}"
-                        else:
-                            self._last_score = f"{int(sm.group(2))/100:+.2f}"
-                    return
-
-    def get_best_move(self, fen, moves, movetime_ms=3000):
-        """
-        Lấy bestmove từ engine — dùng 'go infinite' + sleep + 'stop'.
-        Engine Mistboard này KHÔNG hỗ trợ 'go movetime'.
-        Đã sửa:
-          - Không clear _stdout_lines → không mất bestmove
-          - Seq tracking → không nhầm bestmove cũ
-          - Timeout 5s thay vì 2s
-          - Parse depth/score
-          - Log chẩn đoán khi timeout
-        """
+    def get_best_move(self, fen, moves, movetime_ms=2000):
         if not self.alive():
             if not self.restart():
                 return None
-
-        # ★ Tăng seq — chỉ nhận bestmove khớp seq này
-        with self._lines_lock:
-            self._bestmove_seq += 1
-            my_seq = self._bestmove_seq
-            self._latest_bestmove = None
-            self._bestmove_seen_seq = -1
+        self._latest_bestmove = None
         self._engine_searching = True
-
+        with self._lines_lock:
+            self._stdout_lines.clear()
         try:
+            # ★ Use "position startpos moves ..." — PikaJieQi's native format
+            # PikaJieQi auto-tracks BAG and dark piece reveals from move suffixes
+            # BAG updates correctly: c3c4N → N2→N1 in BAG
+            # Engine uses BAG for expected value calculation in flip_search
             cmd = "position startpos"
             if moves:
                 cmd += " moves " + " ".join(moves)
@@ -791,43 +762,38 @@ class MistboardJieqiEngine:
             print(f"[ENGINE] Send error: {e}")
             self._engine_searching = False
             return None
-
-        # ★ Ngủ đúng movetime_ms
         time.sleep(movetime_ms / 1000.0)
-
-        # ★ Gửi stop — KHÔNG xóa buffer
         try:
             with self.engine_lock:
                 self.proc.stdin.write("stop\n")
                 self.proc.stdin.flush()
         except Exception:
             pass
-
-        # ★ Chờ bestmove — timeout 5s, có seq check
         t0 = time.time()
-        timeout = ENGINE_BESTMOVE_TIMEOUT
+        timeout = 2.0
         while time.time() - t0 < timeout:
-            with self._lines_lock:
-                if (self._latest_bestmove is not None
-                        and self._bestmove_seen_seq == my_seq):
-                    self._engine_searching = False
-                    self._parse_info()
-                    return self._latest_bestmove
+            if self._latest_bestmove:
+                self._engine_searching = False
+                with self._lines_lock:
+                    for l in reversed(self._stdout_lines):
+                        if l.startswith("info") and "depth" in l:
+                            m = re.search(r'depth (\d+)', l)
+                            if m: self._last_depth = m.group(1)
+                            sm = re.search(r'score (cp|mate) (-?\d+)', l)
+                            if sm:
+                                if sm.group(1) == "mate":
+                                    self._last_score = f"M{sm.group(2)}"
+                                else:
+                                    self._last_score = f"{int(sm.group(2))/100:+.2f}"
+                            break
+                return self._latest_bestmove
             if not self.alive():
                 self._engine_searching = False
-                print("[ENGINE] ❌ Engine died while waiting for bestmove")
                 return None
             time.sleep(0.02)
-
-        # Timeout — log chẩn đoán
-        print(f"[ENGINE] ⚠️ bestmove timeout after {timeout:.1f}s "
-              f"(alive={self.alive()})")
-        with self._lines_lock:
-            for l in self._stdout_lines[-10:]:
-                print(f"[ENGINE-DBG] {l}")
+        print(f"[ENGINE] bestmove timeout after stop")
         self._engine_searching = False
-        return None
-
+        return self._latest_bestmove
 
 class JieqiCupBot:
     def __init__(self):
@@ -912,6 +878,8 @@ class JieqiCupBot:
     def _on_message(self, ws, message):
         self.last_recv_timestamp = time.time()
         if isinstance(message, bytes):
+            # Decode once and make the parsed event available to handlers.
+            # This keeps the WS dump/parser and game state on the same input.
             self._decoded_ws_event = None
             try:
                 from ws_frame_dump import decode_frame, log_incoming_frame
@@ -1299,6 +1267,8 @@ class JieqiCupBot:
             parsed_event = getattr(self, "_decoded_ws_event", None)
             parsed_pieces = (parsed_event or {}).get("pieces", [])
             for index in range(piece_count):
+                # Consume the wire bytes for the normal message reader. The
+                # shared parser supplies the exact same decoded piece data.
                 raw_sid = msg.read_byte(); raw_face = msg.read_byte()
                 pos = msg.read_byte(); is_open = msg.read_byte()
                 if index < len(parsed_pieces):
@@ -1333,6 +1303,8 @@ class JieqiCupBot:
                     print(f"[FEN] ❌ Still bad ({_why2})")
                     self.board.flip = not self.board.flip
             self.board.set_base(_built_fen, 'w')
+            
+            # ★ Set visible board from actual piece data
             self.visible_board.set_from_pieces(board_pieces, self.board.flip)
             self.visible_board.side_to_move = 'w'
             for sid, face, position, is_open in board_pieces:
@@ -1370,6 +1342,8 @@ class JieqiCupBot:
         for sid, face, position, is_open in pieces:
             if position < 0 or position >= 90: continue
             fen_row, col = self.board.pos_to_rc(position)
+            # ★ SEE ALL PIECES: use decoded face for ALL pieces (even hidden)
+            # Server sends raw_face = actual piece type for every piece
             if len(face) > 1:
                 color = face[0]; piece_type = int(face[1])
                 type_to_fen = {1: 'k', 2: 'a', 3: 'b', 4: 'r',
@@ -1419,6 +1393,9 @@ class JieqiCupBot:
                 if not UCI_MOVE_RE.match(engine_move):
                     self._move_error_count += 1
                     return
+                # ws_frame_dump is the single wire-decoding source. The
+                # message reader above only advances the protocol offset;
+                # reveal decoding comes from the shared MOVE event.
                 event = getattr(self, "_decoded_ws_event", None) or {}
                 event_source = event.get("source")
                 event_target = event.get("target")
@@ -1444,6 +1421,7 @@ class JieqiCupBot:
                     self._move_skip_count += 1
                     return
                 self.board.record_move(engine_move, revealed_char)
+                # ★ Update visible board
                 src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
                 self.visible_board.apply_move(src_pos, tgt_pos)
                 self.visible_board.flip_side()
@@ -1601,18 +1579,15 @@ class JieqiCupBot:
         if remain < 4.0:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
-        movetime_ms = ENGINE_MOVETIME_MS
+        movetime_ms = 3000
         fen, moves = self.board.get_current_fen()
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
         print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
               flush=True)
-        # ★ Mốc bắt đầu engine — dùng cho MIN_MOVE_SECONDS
-        _engine_start = time.time()
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
         if not raw:
             print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
-                _engine_start = time.time()
                 raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
             if not raw:
                 print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True)
@@ -1630,10 +1605,9 @@ class JieqiCupBot:
             return
         try:
             source_pos, target_pos = self.board.engine_move_to_pos(best_move)
-            # ★ MIN_MOVE_SECONDS tính từ lúc engine bắt đầu — không phải từ SET_TURN
-            _remain_min = MIN_MOVE_SECONDS - (time.time() - _engine_start)
-            if _remain_min > 0:
-                time.sleep(_remain_min)
+            _turn_start = self._turn_started_at if self._turn_started_at > 0 else time.time()
+            _remain_min = MIN_MOVE_SECONDS - (time.time() - _turn_start)
+            if _remain_min > 0: time.sleep(_remain_min)
             if not (self.board.is_my_turn and self.board.is_playing): return
             if self._played_this_turn: return
             print(f"-> Đi: {best_move} (pos {source_pos}->{target_pos}) "
@@ -1657,7 +1631,7 @@ class JieqiCupBot:
         threading.Thread(target=loop, daemon=True).start()
 
     def run(self):
-        print("[BOT] Khởi chạy cờ úp Jieqi v1.3 (go infinite + stop, đã sửa lỗi)...")
+        print("[BOT] Khởi chạy cờ úp Jieqi v1.1 (stay-on-lose)...")
         while True:
             try:
                 now_ts = time.time()
