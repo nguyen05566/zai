@@ -1,4 +1,4 @@
-name: Arena15 (Mistboard PikaJieQi)
+name: Arena15
 
 on:
   workflow_dispatch:
