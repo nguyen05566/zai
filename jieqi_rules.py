@@ -42,6 +42,11 @@ _PIECE_NAMES = {"k": "king", "a": "advisor", "b": "elephant", "n": "horse",
 # Muốn theo luật chuẩn nghiêm ngặt (sĩ không bao giờ rời cung) -> đổi thành True.
 STRICT_ADVISOR = False
 
+# Tượng đã lật: KHÔNG giới hạn sông (= engine + FlipChess, đã probe xác minh:
+# qua sông đi ô trống / ăn quân úp / ăn quân lật đều hợp lệ).
+# Luật chuẩn tướng điển (tượng không qua sông) -> đổi thành True.
+STRICT_ELEPHANT = False
+
 
 def _sq(file: int, rank: int) -> int:
     return rank * 9 + file
@@ -189,9 +194,13 @@ class JieqiRulesTracker:
                     if not own(s):
                         out.append(s)
         elif role == "b":
+            # Probe tren engine (startpos+suffix, dung duong bot dung): tuong
+            # DA LAT khong bi gioi han song (di/An qua song deu LEGAL).
+            # Luat chuan ngam song -> dat STRICT_ELEPHANT = True.
+            confine = (lambda c, r2: True) if not STRICT_ELEPHANT else _own_side
             for df, dr in ((2, 2), (2, -2), (-2, 2), (-2, -2)):
                 nf, nr = f + df, r + dr
-                if 0 <= nf < 9 and 0 <= nr < 10 and _own_side(color, nr) \
+                if 0 <= nf < 9 and 0 <= nr < 10 and confine(color, nr) \
                         and self.board[_sq(f + df // 2, r + dr // 2)] is None:
                     s = _sq(nf, nr)
                     if not own(s):
@@ -291,20 +300,40 @@ class JieqiRulesTracker:
                 if p and p[0] == by and self._role(s) == "n" \
                         and self.board[_sq(nf - lf, nr - lr)] is None:
                     return True
-        # tốt: tấn công theo hướng đi của bên `by`
-        back = -1 if by == RED else 1   # tốt ĐỎ tấn công ô có rank cao hơn nó
-        nr = r + back
-        if 0 <= nr < 10:
-            for nf in (f, f - 1, f + 1):
-                if 0 <= nf < 9:
+        # tượng (co the qua song theo luat engine): tan cong cheo 2 o, mat trong
+        if not STRICT_ELEPHANT:
+            for df, dr in ((2, 2), (2, -2), (-2, 2), (-2, -2)):
+                nf, nr = f + df, r + dr
+                if 0 <= nf < 9 and 0 <= nr < 10:
                     s = _sq(nf, nr)
                     p = self.board[s]
-                    if p and p[0] == by and self._role(s) == "p":
-                        if nf == f:
-                            return True
-                        # ăn ngang chỉ khi tốt đã qua sông (so với ô bị tấn công)
-                        if not _own_side(by, nr - back):
-                            return True
+                    if p and p[0] == by and self._role(s) == "b" \
+                            and self.board[_sq(f + df // 2, r + dr // 2)] is None:
+                        return True
+        # sĩ đã lật (đi chéo tự do): tấn công chéo 1 ô
+        if not STRICT_ADVISOR:
+            for df, dr in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+                nf, nr = f + df, r + dr
+                if 0 <= nf < 9 and 0 <= nr < 10:
+                    s = _sq(nf, nr)
+                    p = self.board[s]
+                    if p and p[0] == by and self._role(s) == "a":
+                        return True
+        # tốt: tấn công tiến thẳng hoặc ngang (nếu đã qua sông)
+        if by == RED:
+            cands = [(f, r - 1)]           # tốt ĐỎ ở dưới ô 1 bậc đánh thẳng
+            if r >= 5:                      # tốt đỏ ngang hàng đã qua sông
+                cands += [(f - 1, r), (f + 1, r)]
+        else:
+            cands = [(f, r + 1)]           # tốt ĐEN ở trên ô 1 bậc đánh thẳng
+            if r <= 4:
+                cands += [(f - 1, r), (f + 1, r)]
+        for nf, nr in cands:
+            if 0 <= nf < 9 and 0 <= nr < 10:
+                s = _sq(nf, nr)
+                p = self.board[s]
+                if p and p[0] == by and self._role(s) == "p":
+                    return True
         return False
 
     def legal_moves(self, side: str) -> list[str]:
