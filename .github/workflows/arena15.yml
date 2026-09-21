@@ -39,3 +39,11 @@ jobs:
         MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
       run: python3 -u arena15.py
       timeout-minutes: 340
+
+    - name: Upload WS capture logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ws-capture-arena15
+        path: ws_capture/
+        retention-days: 7

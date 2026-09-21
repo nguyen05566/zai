@@ -43,3 +43,11 @@ jobs:
         MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
       run: python3 -u cup_bot_mistboard.py
       timeout-minutes: 340
+
+    - name: Upload WS capture logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ws-capture-cup-bot-mistboard
+        path: ws_capture/
+        retention-days: 7
