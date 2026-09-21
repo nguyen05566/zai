@@ -88,6 +88,10 @@ def _clean_env(val, default):
     if val and str(val).strip():
         return str(val).strip()
     return default
+
+USER = _clean_env(os.environ.get("CARO_USER19"), CARO_USER_DIRECT)
+PASSWD = _clean_env(os.environ.get("CARO_PASSWD19"), CARO_PASSWD_DIRECT)
+
 COOKIE = ""
 WS_URL = "wss://gamevh.net/ws/gameServer"
 LOGIN_URL = "https://gamevh.net/login.jsp"
