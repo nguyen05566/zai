@@ -3,8 +3,16 @@ cup_bot_mistboard.py — Cờ Úp Bot dùng bản PikaJieQi build theo Mistboard
 Khác biệt vs cup_bot.py:
 Engine: pikajieqi-mistboard (C++ native, không cần wine)
 Movetime: 3000ms (~3s/nước)
-Engine dùng 'go movetime N' — engine tự quản lý thời gian, không cần stop thủ công
+Engine dùng 'go infinite' + 'stop' (engine này KHÔNG hỗ trợ 'go movetime')
 BAG updates: gửi kèm moves list để Jieqi sync state
+
+[BẢN SỬA — Phương án B]
+- Không clear _stdout_lines → không mất bestmove
+- Seq tracking bestmove → không nhầm bestmove cũ
+- Timeout chờ bestmove 5s (thay vì 2s)
+- MIN_MOVE_SECONDS tính từ lúc engine bắt đầu (thay vì từ SET_TURN)
+- Log chẩn đoán khi timeout
+- MAX_ENGINE_RESTARTS_PER_GAME = 5
 
 [BẢN SỬA] Bot KHÔNG tự kick/Thoát khi thua — luôn ở lại bàn và ready ván mới.
 """
@@ -117,6 +125,7 @@ TRUST_ENGINE_AFTER = 100
 MAX_ENGINE_RESTARTS_PER_GAME = 5
 MOVE_DEDUP_WINDOW = 0.1
 ENGINE_MOVETIME_MS = 3000
+ENGINE_BESTMOVE_TIMEOUT = 5.0   # ★ timeout chờ bestmove sau stop
 
 KICK_MODE = "never"
 KICK_DELAY = 5.0
@@ -571,7 +580,7 @@ class VisibleBoard:
 
 
 # ============================================================================
-# ENGINE — dùng 'go movetime N' với timeout an toàn
+# ENGINE — dùng 'go infinite' + 'stop' (Mistboard KHÔNG hỗ trợ movetime)
 # ============================================================================
 class MistboardJieqiEngine:
     def __init__(self):
@@ -589,8 +598,6 @@ class MistboardJieqiEngine:
         # ★ Seq tracking — chỉ nhận bestmove của lần gọi hiện tại
         self._bestmove_seq = 0
         self._bestmove_seen_seq = -1
-        # ★ Tự phát hiện engine có hỗ trợ movetime không
-        self._supports_movetime = True
         for path in PIKAJIEQI_BINARY_CANDIDATES:
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 self.binary_path = path
@@ -652,12 +659,11 @@ class MistboardJieqiEngine:
                 with self._lines_lock:
                     self._stdout_lines.append(line)
                     if len(self._stdout_lines) > 200:
-                        # Trim nhưng KHÔNG clear sạch — giữ 100 dòng gần nhất
+                        # ★ Chỉ trim, KHÔNG clear sạch
                         self._stdout_lines = self._stdout_lines[-100:]
                 if line == "readyok":
                     self._readyok = True
                 if line.startswith("bestmove"):
-                    # ★ Chỉ nhận bestmove nếu seq khớp lần gọi gần nhất
                     with self._lines_lock:
                         self._latest_bestmove = line
                         self._bestmove_seen_seq = self._bestmove_seq
@@ -693,7 +699,7 @@ class MistboardJieqiEngine:
             print("[ENGINE] ❌ readyok timeout")
             self._kill()
             return
-        print("[ENGINE] ✅ pikajieqi-mistboard ready")
+        print("[ENGINE] ✅ pikajieqi-mistboard ready (go infinite + stop)")
 
     def _wait_for_line(self, prefix, timeout=10):
         t0 = time.time()
@@ -749,25 +755,22 @@ class MistboardJieqiEngine:
                             self._last_score = f"{int(sm.group(2))/100:+.2f}"
                     return
 
-    def _send_position(self, moves):
-        cmd = "position startpos"
-        if moves:
-            cmd += " moves " + " ".join(moves)
-        with self.engine_lock:
-            self.proc.stdin.write(cmd + "\n")
-            self.proc.stdin.flush()
-
     def get_best_move(self, fen, moves, movetime_ms=3000):
         """
-        Lấy bestmove từ engine.
-        Dùng 'go movetime N' — engine tự quản lý thời gian.
-        Fallback sang 'go infinite' + 'stop' nếu engine không hỗ trợ movetime.
+        Lấy bestmove từ engine — dùng 'go infinite' + sleep + 'stop'.
+        Engine Mistboard này KHÔNG hỗ trợ 'go movetime'.
+        Đã sửa:
+          - Không clear _stdout_lines → không mất bestmove
+          - Seq tracking → không nhầm bestmove cũ
+          - Timeout 5s thay vì 2s
+          - Parse depth/score
+          - Log chẩn đoán khi timeout
         """
         if not self.alive():
             if not self.restart():
                 return None
 
-        # ★ Tăng seq — bestmove chỉ được chấp nhận nếu seq khớp
+        # ★ Tăng seq — chỉ nhận bestmove khớp seq này
         with self._lines_lock:
             self._bestmove_seq += 1
             my_seq = self._bestmove_seq
@@ -776,40 +779,34 @@ class MistboardJieqiEngine:
         self._engine_searching = True
 
         try:
-            self._send_position(moves)
-            if self._supports_movetime:
-                with self.engine_lock:
-                    self.proc.stdin.write(f"go movetime {movetime_ms}\n")
-                    self.proc.stdin.flush()
-            else:
-                with self.engine_lock:
-                    self.proc.stdin.write("go infinite\n")
-                    self.proc.stdin.flush()
+            cmd = "position startpos"
+            if moves:
+                cmd += " moves " + " ".join(moves)
+            with self.engine_lock:
+                self.proc.stdin.write(cmd + "\n")
+                self.proc.stdin.flush()
+                self.proc.stdin.write("go infinite\n")
+                self.proc.stdin.flush()
         except Exception as e:
             print(f"[ENGINE] Send error: {e}")
             self._engine_searching = False
             return None
 
-        # ★ Timeout an toàn
-        if self._supports_movetime:
-            hard_timeout = (movetime_ms / 1000.0) + 5.0
-            stop_sent = False
-            t_stop_after = time.time() + (movetime_ms / 1000.0) + 1.0
-        else:
-            # Chế độ fallback: sleep movetime rồi stop
-            time.sleep(movetime_ms / 1000.0)
-            try:
-                with self.engine_lock:
-                    self.proc.stdin.write("stop\n")
-                    self.proc.stdin.flush()
-                stop_sent = True
-            except Exception:
-                pass
-            hard_timeout = 5.0
-            t_stop_after = None
+        # ★ Ngủ đúng movetime_ms
+        time.sleep(movetime_ms / 1000.0)
 
+        # ★ Gửi stop — KHÔNG xóa buffer
+        try:
+            with self.engine_lock:
+                self.proc.stdin.write("stop\n")
+                self.proc.stdin.flush()
+        except Exception:
+            pass
+
+        # ★ Chờ bestmove — timeout 5s, có seq check
         t0 = time.time()
-        while time.time() - t0 < hard_timeout:
+        timeout = ENGINE_BESTMOVE_TIMEOUT
+        while time.time() - t0 < timeout:
             with self._lines_lock:
                 if (self._latest_bestmove is not None
                         and self._bestmove_seen_seq == my_seq):
@@ -820,23 +817,11 @@ class MistboardJieqiEngine:
                 self._engine_searching = False
                 print("[ENGINE] ❌ Engine died while waiting for bestmove")
                 return None
-            # Nếu engine không tự dừng sau movetime+1s → gửi stop dự phòng
-            if self._supports_movetime and not stop_sent and time.time() > t_stop_after:
-                try:
-                    with self.engine_lock:
-                        self.proc.stdin.write("stop\n")
-                        self.proc.stdin.flush()
-                    stop_sent = True
-                    print("[ENGINE] ⚠️ movetime không tự dừng — đã gửi stop dự phòng")
-                    # Nếu engine không hiểu movetime, tắt cho lần sau
-                    self._supports_movetime = False
-                except Exception:
-                    pass
             time.sleep(0.02)
 
         # Timeout — log chẩn đoán
-        print(f"[ENGINE] ⚠️ bestmove timeout after {hard_timeout:.1f}s "
-              f"(alive={self.alive()}, movetime={self._supports_movetime})")
+        print(f"[ENGINE] ⚠️ bestmove timeout after {timeout:.1f}s "
+              f"(alive={self.alive()})")
         with self._lines_lock:
             for l in self._stdout_lines[-10:]:
                 print(f"[ENGINE-DBG] {l}")
@@ -1621,6 +1606,7 @@ class JieqiCupBot:
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
         print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
               flush=True)
+        # ★ Mốc bắt đầu engine — dùng cho MIN_MOVE_SECONDS
         _engine_start = time.time()
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
         if not raw:
@@ -1644,7 +1630,7 @@ class JieqiCupBot:
             return
         try:
             source_pos, target_pos = self.board.engine_move_to_pos(best_move)
-            # ★ MIN_MOVE_SECONDS tính từ lúc engine bắt đầu, không phải từ SET_TURN
+            # ★ MIN_MOVE_SECONDS tính từ lúc engine bắt đầu — không phải từ SET_TURN
             _remain_min = MIN_MOVE_SECONDS - (time.time() - _engine_start)
             if _remain_min > 0:
                 time.sleep(_remain_min)
@@ -1671,7 +1657,7 @@ class JieqiCupBot:
         threading.Thread(target=loop, daemon=True).start()
 
     def run(self):
-        print("[BOT] Khởi chạy cờ úp Jieqi v1.2 (go movetime)...")
+        print("[BOT] Khởi chạy cờ úp Jieqi v1.3 (go infinite + stop, đã sửa lỗi)...")
         while True:
             try:
                 now_ts = time.time()
