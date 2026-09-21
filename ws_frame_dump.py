@@ -4,12 +4,40 @@
 This does not intercept traffic, bypass TLS, or collect credentials. It is
 intended to be called from the bot's on_message callback after websocket-client
 has decrypted the WSS frame for the bot itself.
+
+Multi-bot support
+-----------------
+Several bots (arena15, cup_bot_mistboard, ...) may run from the same checkout
+(e.g. side by side on one VPS, or several processes in one CI job). Each bot
+automatically logs into its own subdirectory:
+
+    ws_capture/<bot>/frames.jsonl
+    ws_capture/<bot>/start_match.jsonl
+    ws_capture/<bot>/events.jsonl
+
+The <bot> name is resolved, in order, from:
+    1. $WS_CAPTURE_DIR        — full directory override (skips the base dir)
+    2. $WS_CAPTURE_BOT        — bot name only
+    3. $CARO_USER19           — bot account name (set by the workflows)
+    4. sys.argv[0] basename   — e.g. "arena15.py" -> "arena15"
+    5. "default"
+
+Log rotation
+------------
+frames.jsonl is size-capped (default 20 MB, keep 2 rotated copies) so a bot
+running for weeks cannot fill the disk. PING/PONG frames are not written by
+default (biggest noise source); set WS_CAPTURE_LOG_PING=1 to keep them.
+
+This module never raises: logging failures are swallowed after one warning so
+the bot's confirm/reveal pipeline (decode_frame) is never disturbed.
 """
 from __future__ import annotations
 
 import json
 import os
 import struct
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +48,59 @@ CMD_NAMES = {
     420: "SET_TURN",
     529: "MOVE",
 }
+
+# --- tunables (env-overridable, read lazily so tests can change them) -------
+_WRITE_LOCK = threading.Lock()
+_WARNED = set()
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+def _max_bytes() -> int:
+    return _env_int("WS_CAPTURE_MAX_BYTES", 20 * 1024 * 1024)
+
+def _keep_copies() -> int:
+    return max(0, _env_int("WS_CAPTURE_KEEP", 2))
+
+def _log_ping() -> bool:
+    return os.environ.get("WS_CAPTURE_LOG_PING", "") == "1"
+
+def _base_dir() -> str:
+    return os.environ.get("WS_CAPTURE_BASE", "ws_capture")
+
+def _bot_name() -> str:
+    explicit = os.environ.get("WS_CAPTURE_BOT")
+    if explicit:
+        return explicit
+    user = os.environ.get("CARO_USER19")
+    if user:
+        return user
+    try:
+        argv0 = sys.argv[0] or ""
+        if argv0 and not argv0.endswith(("python", "python3", "-")):
+            return Path(argv0).stem or "default"
+    except Exception:
+        pass
+    return "default"
+
+def _resolve_dir(directory: str | None) -> Path:
+    if directory:
+        return Path(directory)
+    env_dir = os.environ.get("WS_CAPTURE_DIR")
+    if env_dir:
+        return Path(env_dir)
+    return Path(_base_dir()) / _bot_name()
+
+def _warn_once(key: str, text: str) -> None:
+    if key not in _WARNED:
+        _WARNED.add(key)
+        try:
+            print(f"[WS-CAPTURE] {text}", flush=True)
+        except Exception:
+            pass
 
 
 def s8(v: int) -> int:
@@ -147,6 +228,24 @@ def decode_frame(data: bytes) -> dict[str, Any]:
     return {"command": cmd, "length": len(data), "hex_prefix": data[:256].hex()}
 
 
+def _rotate_if_needed(path: Path, max_bytes: int, keep: int) -> None:
+    """Size-capped rotation: file -> file.1 -> file.2 ... (oldest dropped)."""
+    try:
+        if not path.exists() or path.stat().st_size <= max_bytes:
+            return
+        for i in range(keep, 0, -1):
+            src = path.with_suffix(path.suffix + f".{i}")
+            if i == keep:
+                if src.exists():
+                    src.unlink()
+                continue
+            if src.exists():
+                src.replace(path.with_suffix(path.suffix + f".{i + 1}"))
+        path.replace(path.with_suffix(path.suffix + ".1"))
+    except OSError as exc:
+        _warn_once(f"rotate:{path}", f"rotation failed for {path}: {exc}")
+
+
 def _open_log(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     # Do not let a shared-readable log expose game frames.
@@ -154,12 +253,24 @@ def _open_log(path: Path):
     return os.fdopen(fd, "a", encoding="utf-8")
 
 
-def log_incoming_frame(data: bytes, directory: str = "ws_capture") -> None:
+def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    """Rotate (size-capped) then append one JSON record. Every log file,
+    including events.jsonl / start_match.jsonl, goes through here so none of
+    them can grow without bound."""
+    _rotate_if_needed(path, _max_bytes(), _keep_copies())
+    with _open_log(path) as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def log_incoming_frame(data: bytes, directory: str | None = None) -> None:
     """Log one already-decrypted binary WebSocket message.
 
     LOGIN frames are intentionally not written because they can contain
     session-related values. Other frames get a bounded hex dump. START_MATCH
     additionally gets a parsed JSON record for raw_face analysis.
+
+    Never raises: any I/O problem is reported once and then ignored so the
+    bot's game logic is unaffected.
     """
     data = bytes(data)
     try:
@@ -167,40 +278,40 @@ def log_incoming_frame(data: bytes, directory: str = "ws_capture") -> None:
     except Exception as exc:
         cmd = f"parse_error:{exc}"
 
-    out = Path(directory)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
     if cmd == "LOGIN":
-        print("[WS-CAPTURE] LOGIN received; payload intentionally not logged")
+        return
+    if cmd in ("PING", "PONG") and not _log_ping():
         return
 
-    meta = {
-        "timestamp": time.time(),
-        "command": cmd,
-        "length": len(data),
-        # Enough to identify framing without creating a huge credential dump.
-        "hex_prefix": data[:256].hex(),
-    }
-    with _open_log(out / "frames.jsonl") as f:
-        f.write(json.dumps(meta, ensure_ascii=False) + "\n")
+    try:
+        with _WRITE_LOCK:
+            out = _resolve_dir(directory)
+            _append_jsonl(out / "frames.jsonl", {
+                "timestamp": time.time(),
+                "bot": _bot_name(),
+                "command": cmd,
+                "length": len(data),
+                # Enough to identify framing without a huge credential dump.
+                "hex_prefix": data[:256].hex(),
+            })
 
-    if cmd in ("START_MATCH", "MOVE"):
-        try:
-            parsed = decode_frame(data)
-            log_name = "start_match.jsonl" if cmd == "START_MATCH" else "events.jsonl"
-            with _open_log(out / log_name) as f:
-                f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
-            if cmd == "MOVE":
-                return
-            hidden = [p for p in parsed["pieces"] if not p["is_open"]]
-            print(f"[WS-CAPTURE] START_MATCH pieces={len(parsed['pieces'])} hidden={len(hidden)}")
-            for p in hidden:
-                print(
-                    "[WS-CAPTURE] hidden piece "
-                    f"pos={p['position']} sid={p['sid_decoded']} "
-                    f"face={p['face_decoded']} raw_face=0x{p['raw_face_byte']:02x}"
-                )
-        except Exception as exc:
-            print(f"[WS-CAPTURE] START_MATCH parse failed: {exc}")
+            if cmd in ("START_MATCH", "MOVE"):
+                parsed = decode_frame(data)
+                log_name = "start_match.jsonl" if cmd == "START_MATCH" else "events.jsonl"
+                _append_jsonl(out / log_name, parsed)
+                if cmd == "START_MATCH":
+                    hidden = [p for p in parsed["pieces"] if not p["is_open"]]
+                    print(f"[WS-CAPTURE] START_MATCH pieces={len(parsed['pieces'])} hidden={len(hidden)}")
+                    for p in hidden:
+                        print(
+                            "[WS-CAPTURE] hidden piece "
+                            f"pos={p['position']} sid={p['sid_decoded']} "
+                            f"face={p['face_decoded']} raw_face=0x{p['raw_face_byte']:02x}"
+                        )
+    except OSError as exc:
+        _warn_once(f"io:{type(exc).__name__}", f"log write failed: {exc}")
+    except Exception as exc:  # defensive: never disturb the bot
+        _warn_once(f"logic:{type(exc).__name__}", f"log logic failed: {exc}")
 
 
 if __name__ == "__main__":
