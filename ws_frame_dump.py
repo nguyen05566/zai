@@ -21,28 +21,9 @@ CMD_NAMES = {
     529: "MOVE",
 }
 
+
 def s8(v: int) -> int:
     return v - 256 if v > 127 else v
-
-PIECE_TYPE_MAP = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
-
-
-def raw_byte_to_fen_char(raw_byte: int) -> str | None:
-    """Convert a raw piece byte to a FEN character.
-
-    Positive values = red, negative = black.
-    Piece type is encoded in bits 3..6 (value >> 3):
-        1=King, 2=Advisor, 3=Bishop, 4=Rook, 5=Cannon, 6=Knight, 7=Pawn
-    """
-    v = s8(raw_byte)
-    if v == 0:
-        return None
-    color = 'r' if v > 0 else 'b'
-    piece_type = abs(v) >> 3
-    fen_char = PIECE_TYPE_MAP.get(piece_type)
-    if fen_char is None:
-        return None
-    return fen_char.upper() if color == 'r' else fen_char
 
 
 def decode_piece_id(raw: int) -> str:
@@ -118,36 +99,41 @@ def parse_start_match(data: bytes) -> dict[str, Any]:
     }
 
 
+PIECE_TYPE_TO_FEN = {1: "k", 2: "a", 3: "b", 4: "r", 5: "c", 6: "n", 7: "p"}
+
+
+def decode_face_byte(raw: int) -> str | None:
+    """Decode the revealed-piece byte used by GameVH MOVE payloads."""
+    value = s8(raw)
+    if value == 0:
+        return None
+    piece = PIECE_TYPE_TO_FEN.get(abs(value) >> 3)
+    if not piece:
+        return None
+    return piece.upper() if value > 0 else piece
+
+
 def parse_move(data: bytes) -> dict[str, Any]:
-    """Parse a MOVE event into a reusable, JSON-safe event.
+    """Parse MOVE, including the revealed piece, from the wire payload.
 
-    Wire format (after command prefix):
-        source  (u8)  — origin cell 0-89
-        target  (u8)  — destination cell 0-89
-        [reveal (u8)] — optional: raw piece byte when a hidden piece flips
-
-    The revealed piece is the *actual* type of a face-down piece that just
-    moved (or was captured).  raw_byte_to_fen_char converts it to the FEN
-    letter the engine expects (e.g. 'R' for a red rook, 'n' for a black
-    knight).  A value of 0 or an absent byte means no reveal happened.
+    GameVH puts the revealed SID at payload byte 2 when payload byte 0 is
+    non-zero. Keep this rule here so the bot does not independently interpret
+    raw WebSocket bytes.
     """
     cmd, off = command_id(data)
     if cmd != "MOVE":
         raise ValueError(f"not MOVE: {cmd!r}")
     source, off = u8(data, off)
     target, off = u8(data, off)
-
-    revealed_piece = None
-    if off < len(data):
-        raw_reveal, off = u8(data, off)
-        revealed_piece = raw_byte_to_fen_char(raw_reveal)
-
+    payload = data[off:]
+    reveal_byte = payload[2] if len(payload) >= 3 and payload[0] > 0 else None
     return {
         "command": "MOVE",
         "source": source,
         "target": target,
-        "revealed_piece": revealed_piece,
-        "payload_hex": data[off:].hex(),
+        "payload_hex": payload.hex(),
+        "reveal_byte": reveal_byte,
+        "revealed_piece": decode_face_byte(reveal_byte) if reveal_byte is not None else None,
     }
 
 
@@ -158,8 +144,6 @@ def decode_frame(data: bytes) -> dict[str, Any]:
         return parse_start_match(data)
     if cmd == "MOVE":
         return parse_move(data)
-    if cmd == "GAMEOVER":
-        return parse_gameover(data)
     return {"command": cmd, "length": len(data), "hex_prefix": data[:256].hex()}
 
 
@@ -217,29 +201,6 @@ def log_incoming_frame(data: bytes, directory: str = "ws_capture") -> None:
                 )
         except Exception as exc:
             print(f"[WS-CAPTURE] START_MATCH parse failed: {exc}")
-
-
-def parse_gameover(data: bytes) -> dict[str, Any]:
-    """Parse a GAMEOVER event.
-
-    Wire format (after command prefix):
-        count   (u8)
-        repeat count times:
-            slot_id   (u8)
-            result    (u8)   — 1=win, 2=lose, 4=disconnect, 11=win-time, 12=lose-time
-            score     (i64)
-    """
-    cmd, off = command_id(data)
-    if cmd != "GAMEOVER":
-        raise ValueError(f"not GAMEOVER: {cmd!r}")
-    count, off = u8(data, off)
-    results = []
-    for _ in range(count):
-        slot_id, off = u8(data, off)
-        result, off = u8(data, off)
-        score, off = struct.unpack_from(">q", data, off)[0], off + 8
-        results.append({"slot": slot_id, "result": result, "score": score})
-    return {"command": "GAMEOVER", "count": count, "results": results}
 
 
 if __name__ == "__main__":
