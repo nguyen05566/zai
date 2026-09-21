@@ -128,11 +128,17 @@ BOT_TURN_DURATION = '30'
 BOT_ACC_DURATION = '0'
 BOT_BLOCK_SOFTWARE = '0'
 
-# === TIME MANAGEMENT (tong 5 phut/van, toi da 20s/nuoc) ===
+# === TIME MANAGEMENT (tu dong theo BOT_MATCH_DURATION) ===
+# Chi can doi BOT_MATCH_DURATION (phut) la moi gia tri duoi tu co gian theo:
+#   5 phut: clock 300s | cap 20s | clamp 60s | delay 3.0s   (nhu cu)
+#   3 phut: clock 180s | cap 12s | clamp 36s | delay 1.8s
+#   2 phut: clock 120s | cap  8s | clamp 24s | delay 1.2s
 MATCH_CLOCK_SECONDS = float(BOT_MATCH_DURATION) * 60.0   # dong ho tong moi ben
-MAX_THINK_SECONDS = 20.0         # tran nghi cung 1 nuoc
+MAX_THINK_SECONDS = min(20.0, MATCH_CLOCK_SECONDS / 15.0)   # toi da ~6.7% clock/nuoc
 CLOCK_SAFETY_SECONDS = 5.0       # khong dip duoi vung an toan cuoi dong ho
-CLOCK_CHARGE_CLAMP_SECONDS = 60.0  # chong lag lam mat dong ho ao
+CLOCK_CHARGE_CLAMP_SECONDS = min(60.0, MATCH_CLOCK_SECONDS / 5.0)  # toi da ~20% clock/1 lan lag
+# Delay "nguoi" cung phai co lai: 3s x 30 nuoc = 90s la qua voi van ngan
+MIN_MOVE_SECONDS = min(3.0, MATCH_CLOCK_SECONDS / 100.0)   # override gia tri o tren
 
 VN_TEN_DAU = [
     "Tuấn ",  "Minh ",  "Đức ",  "Hoàng ",  "Huy ",  "Hùng ",  "Dũng ",  "Cường ",  "Long ",  "Nam ",
@@ -604,6 +610,11 @@ class MistboardJieqiEngine:
         self._stdout_lines = []
         self._lines_lock = threading.Lock()
         for path in PIKAJIEQI_BINARY_CANDIDATES:
+            if os.path.isfile(path) and not os.access(path, os.X_OK):
+                try:
+                    os.chmod(path, 0o755)   # checkout moi thuong mat bit executible
+                except OSError:
+                    pass
             if os.path.isfile(path) and os.access(path, os.X_OK):
                 self.binary_path = path
                 break
