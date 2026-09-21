@@ -3,9 +3,7 @@ name: Arena15
 on:
   workflow_dispatch:
 
-concurrency:
-  group: cup-up-bot-mistboard-pikajieqi
-  cancel-in-progress: false
+
 
 jobs:
   run-bot:
