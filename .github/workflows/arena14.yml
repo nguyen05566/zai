@@ -37,14 +37,12 @@ jobs:
     - name: Run Mistboard engine bot
       env:
         MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
-        
-        ARENA_MAX_GAMES: '3'
       run: python3 -u arena14.py
-      timeout-minutes: 60
+      timeout-minutes: 340
 
     - name: Upload WS capture logs
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v14
       with:
         name: ws-capture-arena14
         path: ws_capture/
