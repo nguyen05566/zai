@@ -1,0 +1,48 @@
+name: Arena18 (Mistboard PikaJieQi)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential
+
+      - name: Install Python dependencies
+        run: pip install websocket-client requests
+
+      - name: Build Mistboard PikaJieQi
+        run: bash build_engine_mistboard.sh
+
+      - name: Verify engine
+        run: |
+          echo "uci" | ./pikajieqi-mistboard | grep -E '^(id name|uciok)$'
+          test -x ./pikajieqi-mistboard
+
+      - name: Run arena18 for three games
+        env:
+          MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
+          ARENA_MAX_GAMES: '3'
+        run: python3 -u arena18.py
+        timeout-minutes: 55
+
+      - name: Upload WebSocket capture logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ws-capture-arena18
+          path: ws_capture/
+          retention-days: 7
