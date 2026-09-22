@@ -6,7 +6,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 600
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
       - name: Run arena18 for three games
         env:
           MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
-          ARENA_MAX_GAMES: '3'
+          ARENA_MAX_GAMES: '300'
         run: python3 -u arena18.py
         timeout-minutes: 55
 
