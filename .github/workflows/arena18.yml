@@ -37,7 +37,7 @@ jobs:
           MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
           ARENA_MAX_GAMES: '300'
         run: python3 -u arena18.py
-        timeout-minutes: 55
+        timeout-minutes: 595
 
       - name: Upload WebSocket capture logs
         if: always()

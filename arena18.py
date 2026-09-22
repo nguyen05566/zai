@@ -124,7 +124,9 @@ KICK_DELAY = 5.0
 SIT_ALONE_TIMEOUT = 300.0
 
 BOT_BET_XU = 10000
+# Create a private table every time; never use QUICK_PLAY or search/rejoin a table.
 BOT_USE_CREATE_TABLE = True
+CREATE_TABLE_ONLY = True
 BOT_MATCH_DURATION = '5'
 BOT_TURN_DURATION = '30'
 BOT_ACC_DURATION = '0'
@@ -1125,15 +1127,10 @@ class JieqiCupBot:
             threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
                              daemon=True).start()
         elif not self.in_game:
-            if self._table_path and time.time() - self._table_path_ts < 180:
-                print(f"[TABLE] Rejoin: {self._table_path}")
-                self.in_game = True
-                self._joining_table = True
-                path = self._table_path
-                threading.Thread(target=lambda: (time.sleep(0.5),
-                                                  self.send_enter_place(path=path, mode=1)),
-                                 daemon=True).start()
-                return
+            # Do not rejoin an old table after reconnect. The bot must create a
+            # fresh table through CREATE_RULE instead of finding an existing one.
+            self._table_path = None
+            self._table_created_by_me = False
             self._bet_amts_loaded = False
             self._resolved_bet_id = None
             self.send_list_bet_amt()
@@ -1724,23 +1721,17 @@ class JieqiCupBot:
                     if now - self._last_quick_play_time >= self._QUICK_PLAY_INTERVAL:
                         if not self._bet_amts_loaded:
                             self.send_list_bet_amt()
-                        elif BOT_USE_CREATE_TABLE:
+                        elif CREATE_TABLE_ONLY:
                             bid = (self._resolved_bet_id
                                    if self._resolved_bet_id is not None
                                    else self.resolve_bet_amt_id())
                             print(f"[CREATE] 🪑 Tạo bàn {BOT_BET_XU} xu (bet_id={bid})")
                             self.send_create_table(bet_amt_id=bid)
                         else:
-                            valid_bets = self.get_1k_to_5k_bet_objs()
-                            if valid_bets:
-                                bet_obj = random.choice(valid_bets)
-                                room = random.choice(self.ROOM_LIST)
-                                print(f"[SEARCH] 🔍 Dò bàn {bet_obj['value']} xu phòng '{room}'")
-                                self.send_quick_play(room_id=room, bet_amt_id=bet_obj['id'])
-                                self._quick_play_attempts += 1
-                            else:
-                                self.send_create_table()
-                                self._quick_play_attempts = 0
+                            # Defensive fallback: CREATE_RULE remains the only
+                            # supported matchmaking operation in this bot.
+                            print(f"[CREATE] 🪑 Tạo bàn {BOT_BET_XU} xu (fallback)")
+                            self.send_create_table()
                 time.sleep(1)
             except KeyboardInterrupt:
                 break
