@@ -84,13 +84,15 @@ requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
 CARO_USER_DIRECT = "arena14"
-CARO_PASSWD_DIRECT = "******"
+CARO_PASSWD_DIRECT = "nhat123456"
 
 def _clean_env(val, default):
     if val and str(val).strip():
         return str(val).strip()
     return default
 
+# Direct credentials are the default; environment variables are optional
+# overrides for local testing and are not required by the workflow.
 USER = _clean_env(os.environ.get("CARO_USER19"), CARO_USER_DIRECT)
 PASSWD = _clean_env(os.environ.get("CARO_PASSWD19"), CARO_PASSWD_DIRECT)
 
