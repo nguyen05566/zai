@@ -1,0 +1,222 @@
+diff --git a/engine/pipe.cpp b/engine/pipe.cpp
+index 1b5afd3..50d9be4 100644
+--- a/engine/pipe.cpp
++++ b/engine/pipe.cpp
+@@ -242,7 +242,7 @@ bool PipeStruct::GetBuffer(char *szLineStr) {
+     szLineStr[nFeedEnd] = '\0';
+     nFeedEnd ++;
+     nReadEnd -= nFeedEnd;
+-    memcpy(szBuffer, szBuffer + nFeedEnd, nReadEnd);
++    memmove(szBuffer, szBuffer + nFeedEnd, nReadEnd); /* PATCH: overlap-safe (was memcpy, UB) */
+     lpFeedEnd = (char *) strchr(szLineStr, '\r');
+     if (lpFeedEnd != NULL) {
+       *lpFeedEnd = '\0';
+diff --git a/engine/position.cpp b/engine/position.cpp
+index aece198..f70a5c7 100644
+--- a/engine/position.cpp
++++ b/engine/position.cpp
+@@ -224,7 +224,17 @@ PositionStruct::MoveResultStruct PositionStruct::MovePiece(int64_t mv, int64_t t
+             return {false, 0, false, 0};
+         }
+         if (truePcMoved == -1) {
+-            int64_t index = (this->rc4Random.NextLong() % this->unknownCount[this->sdPlayer]) + 1;
++            int64_t index = (this->unknownCount[this->sdPlayer] > 0
++                             ? (this->rc4Random.NextLong() % this->unknownCount[this->sdPlayer]) + 1 : 0); /* PATCH: FPE guard */
++            if (index == 0) {
++                /* count == 0: pick first possible entry (or leave -1 -> rejected below) */
++                for (int i = 0; i < 64; i++) {
++                    if (this->unknownPieces[this->sdPlayer][i]) {
++                        truePcMoved = i;
++                        break;
++                    }
++                }
++            }
+             for (int i = 0; i < 64; i++) {
+                 if (this->unknownPieces[this->sdPlayer][i]) {
+                     index--;
+@@ -234,13 +244,26 @@ PositionStruct::MoveResultStruct PositionStruct::MovePiece(int64_t mv, int64_t t
+                     }
+                 }
+             }
++            /* PATCH: count/array drift guard — fall back to first possible
++               entry instead of leaving -1 (OOB read/write downstream) */
++            if (truePcMoved == -1) {
++                for (int i = 0; i < 64; i++) {
++                    if (this->unknownPieces[this->sdPlayer][i]) {
++                        truePcMoved = i;
++                        break;
++                    }
++                }
++            }
+         }
+     } else if (truePcMoved == -1 || truePcMoved == 0) {
+         truePcMoved = pcMoved;
+     } else if (truePcMoved != 0) {
+         return MoveResultStruct{false, 0, false, 0};
+     }
+-    __ASSERT_PIECE(truePcMoved);
++    /* PATCH: unresolved reveal -> reject the move instead of asserting */
++    if (truePcMoved < 0 || truePcMoved > 63) {
++        return MoveResultStruct{false, 0, false, 0};
++    }
+ 
+     if (pcCaptured == NO_PIECE) {
+         if (unknownCpt != 0 && unknownCpt != -1) {
+@@ -252,7 +275,16 @@ PositionStruct::MoveResultStruct PositionStruct::MovePiece(int64_t mv, int64_t t
+                 return MoveResultStruct{false, 0, false, 0};
+             }
+             if (unknownCpt == -1) {
+-                int64_t index = (this->rc4Random.NextLong() % this->unknownOppositeCount[this->sdPlayer]) + 1;
++                int64_t index = (this->unknownOppositeCount[this->sdPlayer] > 0
++                                 ? (this->rc4Random.NextLong() % this->unknownOppositeCount[this->sdPlayer]) + 1 : 0); /* PATCH: FPE guard */
++                if (index == 0) {
++                    for (int i = 0; i < 64; i++) {
++                        if (this->unknownOppositePieces[this->sdPlayer][i]) {
++                            unknownCpt = i;
++                            break;
++                        }
++                    }
++                }
+                 for (int i = 0; i < 64; i++) {
+                     if (this->unknownOppositePieces[this->sdPlayer][i]) {
+                         index--;
+@@ -262,6 +294,15 @@ PositionStruct::MoveResultStruct PositionStruct::MovePiece(int64_t mv, int64_t t
+                         }
+                     }
+                 }
++                /* PATCH: same drift guard for the captured piece */
++                if (unknownCpt == -1) {
++                    for (int i = 0; i < 64; i++) {
++                        if (this->unknownOppositePieces[this->sdPlayer][i]) {
++                            unknownCpt = i;
++                            break;
++                        }
++                    }
++                }
+             }
+         } else if (unknownCpt != 0 && unknownCpt != -1){
+             return MoveResultStruct{false, 0, false, 0};
+@@ -311,12 +352,16 @@ PositionStruct::MoveResultStruct PositionStruct::MovePiece(int64_t mv, int64_t t
+         this->dwBitPiece ^= BIT_PIECE(pcCaptured);
+         pt = PIECE_TYPE(pcCaptured);
+ 
+-        if (isUnknownPcCap) {
++        /* PATCH: unknownCpt can stay -1 when the possible-set has drifted
++           empty during search — guard all [-1] indexing (OOB read/write). */
++        if (isUnknownPcCap && unknownCpt >= 0) {
+             this->unknownEatenCount[1 - this->sdPlayer]++;
+             this->unknownOppositePieces[this->sdPlayer][unknownCpt] = false;
+             this->unknownOppositeCount[this->sdPlayer]--;
+             this->unknownEatPieces[this->sdPlayer][unknownCpt] = true;
+             this->unknownEatCount[this->sdPlayer]++;
++        } else if (isUnknownPcCap) {
++            unknownCpt = pcCaptured; /* safe placeholder code for eval below */
+         }
+ 
+         if (pcCaptured < 32) {
+@@ -324,13 +369,13 @@ PositionStruct::MoveResultStruct PositionStruct::MovePiece(int64_t mv, int64_t t
+ //                this->vlWhite -= 10;
+ //            }
+ //            this->vlWhite -= PreEval.ucvlWhitePieces[pt][sqDst];
+-            this->vlWhite -= PreEval.ucvlWhitePieces[PIECE_TYPE(unknownCpt)][sqDst];
++            this->vlWhite -= PreEval.ucvlWhitePieces[PIECE_TYPE(unknownCpt >= 0 ? unknownCpt : pcCaptured)][sqDst];
+         } else {
+ //            if (pt == 7) {
+ //                this->vlBlack -= 10;
+ //            }
+ //            this->vlBlack -= PreEval.ucvlBlackPieces[pt][sqDst];
+-            this->vlBlack -= PreEval.ucvlBlackPieces[PIECE_TYPE(unknownCpt)][sqDst];
++            this->vlBlack -= PreEval.ucvlBlackPieces[PIECE_TYPE(unknownCpt >= 0 ? unknownCpt : pcCaptured)][sqDst];
+             pt += 8;
+         }
+         __ASSERT_BOUND(0, pt, 15);
+@@ -754,39 +799,41 @@ void PositionStruct::FromFen(const char *szFen) {
+     lpFen++;
+     lpFen++;
+ 
+-    int64_t pc[4][8];
+-    pc[0][0] = KING_FROM;
+-    pc[0][1] = ADVISOR_FROM;
+-    pc[0][2] = BISHOP_FROM;
+-    pc[0][3] = KNIGHT_FROM;
+-    pc[0][4] = ROOK_FROM;
+-    pc[0][5] = CANNON_FROM;
+-    pc[0][6] = PAWN_FROM;
+-    pc[0][7] = UNKNOWN_FROM;
+-    for (i = 0; i < 8; i++) {
+-        pc[1][i] = pc[0][i];
+-        pc[2][i] = pc[0][i];
+-        pc[3][i] = pc[0][i];
+-    }
+-
++    /* PATCH (critical): bag letters must CONTINUE the per-type piece-code
++       counters used by the board parsing (pcWhite/pcBlack). The original
++       code restarted fresh counters, so a bag letter could take a code
++       already occupied by a revealed piece on the board. During search a
++       covered piece "revealing" as that code hijacked ucsqPieces[code]
++       and the undo zeroed it — permanently erasing the real piece (e.g.
++       the checking cannon) from check detection / move generation. */
++    static const int64_t nTypeMax[8] = {KING_FROM + 1, ADVISOR_TO + 1, BISHOP_TO + 1,
++                                        KNIGHT_TO + 1, ROOK_TO + 1, CANNON_TO + 1,
++                                        PAWN_TO + 1, UNKNOWN_FROM};
+     for (int side = 0; side < 2; side++) {
+-        while (*lpFen != ' ') {
++        int64_t *pcOwn = (side == 0 ? pcWhite : pcBlack); /* bag1: own possible-covered */
++        int64_t *pcOpp = (side == 0 ? pcBlack : pcWhite); /* bag2: opp captured-covered */
++        while (*lpFen != ' ' && *lpFen != '\0') {
+             if (*lpFen >= 'a' && *lpFen <= 'z') {
+-                this->unknownPieces[side][pc[side * 2][FenPiece(*lpFen + 'A' - 'a')] + SIDE_TAG(side)] = true;
+-                this->unknownCount[side]++;
+-                pc[side * 2][FenPiece(*lpFen + 'A' - 'a')]++;
++                int64_t k = FenPiece(*lpFen + 'A' - 'a');
++                if (k >= 1 && k <= 6 && pcOwn[k] < nTypeMax[k]) {
++                    this->unknownPieces[side][pcOwn[k] + SIDE_TAG(side)] = true;
++                    this->unknownCount[side]++;
++                    pcOwn[k]++;
++                }
+             }
+             lpFen++;
+         }
+         lpFen++;
+ 
+-        while (*lpFen != ' ') {
++        while (*lpFen != ' ' && *lpFen != '\0') {
+             if (*lpFen >= 'a' && *lpFen <= 'z') {
+-                this->unknownEatPieces[side][pc[side * 2 + 1][FenPiece(*lpFen + 'A' - 'a')] +
+-                                             SIDE_TAG(1 - side)] = true;
+-                this->unknownEatCount[side]++;
+-                pc[side * 2 + 1][FenPiece(*lpFen + 'A' - 'a')]++;
+-                this->unknownEatenCount[1 - side]++;
++                int64_t k = FenPiece(*lpFen + 'A' - 'a');
++                if (k >= 1 && k <= 6 && pcOpp[k] < nTypeMax[k]) {
++                    this->unknownEatPieces[side][pcOpp[k] + SIDE_TAG(1 - side)] = true;
++                    this->unknownEatCount[side]++;
++                    pcOpp[k]++;
++                    this->unknownEatenCount[1 - side]++;
++                }
+             }
+             lpFen++;
+         }
+diff --git a/engine/search.cpp b/engine/search.cpp
+index 2a494da..8dd9626 100644
+--- a/engine/search.cpp
++++ b/engine/search.cpp
+@@ -834,15 +834,9 @@ static int64_t SearchRootNew(int64_t nDepth) {
+             vl = valSum / count;
+         }
+ 
+-        // todo
+-        if (Search.pos.MakeMove(mv)) {
+-            dwMoveStr = MOVE_COORD(mv);
+-            printf("%d move: %.4s, %lld\n", nDepth, (const char *) &dwMoveStr, mv);
+-            Search.pos.PrintBoard();
+-            Search.pos.UndoMakeMove();
+-            printf("%lld count: %lld, val sum: %lld\n", nDepth, count, valSum);
+-            printf("%lld this move val: %lld\n\n", nDepth, vl);
+-        }
++        /* PATCH: removed debug MakeMove/PrintBoard block — it mutated
++           unknown-piece state (random reveals) and crashed with OOB
++           PIECE_TYPE(-1) when the random capture-reveal walk failed. */
+ 
+         if (Search2.bStop) {
+             return vlBestBest;

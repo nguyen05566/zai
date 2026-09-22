@@ -84,6 +84,11 @@ class JieqiRulesTracker:
         # mỗi ô: (color, loại nếu đã lật / None nếu úp)
         self.side_to_move = RED
         self.ok = True
+        # ── JieqiAI FEN export: lũy kế các quân ĐÃ LẬT công khai (mỗi quân 1 lần) ──
+        self.revealed_seen: dict[str, dict[str, int]] = {
+            'r': dict(a=0, b=0, n=0, r=0, c=0, p=0),
+            'b': dict(a=0, b=0, n=0, r=0, c=0, p=0),
+        }
 
     # ---------- khởi tạo ----------
     def set_initial(self, pieces) -> bool:
@@ -92,6 +97,8 @@ class JieqiRulesTracker:
         Trả False nếu bố cục không chuẩn."""
         self.board = [None] * 90
         self.side_to_move = RED
+        self.revealed_seen = {'r': dict(a=0, b=0, n=0, r=0, c=0, p=0),
+                              'b': dict(a=0, b=0, n=0, r=0, c=0, p=0)}
         kings = {RED: 0, BLACK: 0}
         for item in pieces:
             sq, color, revealed = item[0], item[1], item[2]
@@ -110,6 +117,8 @@ class JieqiRulesTracker:
                 self.board[sq] = (color, t)
                 if t == "k":
                     kings[color] += 1
+                elif t in self.revealed_seen[color]:
+                    self.revealed_seen[color][t] += 1
             else:
                 if (r, f) not in _BORN:
                     return False  # ô không có vai trò chuẩn -> không suy được luật
@@ -139,7 +148,10 @@ class JieqiRulesTracker:
         if src == dst:
             # lật tại chỗ: phải có suffix revealing
             if revealed_char:
-                self.board[src] = (color, revealed_char.lower())
+                t = revealed_char.lower()
+                self.board[src] = (color, t)
+                if t in self.revealed_seen[color]:
+                    self.revealed_seen[color][t] += 1
             else:
                 self.ok = False
                 return False
@@ -149,7 +161,10 @@ class JieqiRulesTracker:
             if ptype is None:
                 # quân úp vừa đi -> lật; không biết loại thì mất đồng bộ
                 if revealed_char:
-                    self.board[dst] = (color, revealed_char.lower())
+                    t = revealed_char.lower()
+                    self.board[dst] = (color, t)
+                    if t in self.revealed_seen[color]:
+                        self.revealed_seen[color][t] += 1
                 else:
                     self.ok = False
                     return False
@@ -360,6 +375,50 @@ class JieqiRulesTracker:
                 if not bad:
                     result.append(_uci(src, dst))
         return result
+
+
+    # ---------- xuất FEN dialect JieqiAI (ElephantEye 揭棋) ----------
+
+    def remaining_bag(self, color: str) -> dict[str, int]:
+        """Multiset các loại quân CÓ THỂ còn úp của `color` (model công khai:
+        15 quân đầu trừ các quân đã lật công khai; quân úp bị ăn không lật
+        -> vẫn nằm trong pool vì danh tính không public)."""
+        out = {}
+        for t, n in (('a', 2), ('b', 2), ('n', 2), ('r', 2), ('c', 2), ('p', 5)):
+            out[t] = max(0, n - self.revealed_seen[color].get(t, 0))
+        return out
+
+    def to_jieqiai_fen(self) -> str:
+        """FEN cho engine JieqiAI:
+        <board> <w|b> <bagRed> <bagRedEaten> <bagBlack> <bagBlackEaten>
+        - board: rank 9 -> 0 (đen trên cùng), X/x = úp, KABNRCP/kabnrcp = đã lật
+        - bagX = chữ cái của các loại quân còn có thể úp (thứ tự bất kỳ)
+        - bagXEaten: rỗng (GameVH không lật quân úp bị ăn)
+        - kết thúc bằng 2 space (chống overread vòng parse bag cuối của engine)
+        """
+        rows = []
+        for rank in range(9, -1, -1):
+            row, empty = "", 0
+            for file in range(9):
+                p = self.board[rank * 9 + file]
+                if p is None:
+                    empty += 1
+                    continue
+                if empty:
+                    row += str(empty)
+                    empty = 0
+                color, t = p
+                ch = (t or "x").upper() if color == RED else (t or "x")
+                row += ch
+            if empty:
+                row += str(empty)
+            rows.append(row)
+        side = "w" if self.side_to_move == RED else "b"
+        bags = []
+        for color in ("r", "b"):
+            bag = self.remaining_bag(color)
+            bags.append("".join(t * bag[t] for t in ("r", "n", "b", "a", "c", "p")))
+        return (f"{'/'.join(rows)} {side} {bags[0]}  {bags[1]}  ")
 
 
 def build_initial_standard() -> JieqiRulesTracker:

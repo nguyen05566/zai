@@ -1,0 +1,51 @@
+name: Cờ Úp Bot (JieqiAI)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: cup-up-bot-jieqiai
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential
+
+    - name: Install Python dependencies
+      run: pip install websocket-client requests
+
+    - name: Build JieqiAI engine (patched)
+      run: bash build_engine_jieqiai.sh
+
+    - name: Verify engine
+      run: |
+        (echo "ucci"; sleep 1; echo "quit") | ./jieqiai | head -3
+        ls -la jieqiai
+
+    - name: Run JieqiAI engine bot
+      env:
+        JIEQIAI_ENGINE: ./jieqiai
+      run: python3 -u cup_bot_jieqiai.py
+      timeout-minutes: 340
+
+    - name: Upload WS capture logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ws-capture-cup-bot-jieqiai
+        path: ws_capture/
+        retention-days: 7
