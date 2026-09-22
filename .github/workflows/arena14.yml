@@ -37,8 +37,7 @@ jobs:
     - name: Run Mistboard engine bot
       env:
         MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
-        CARO_USER19: ${{ secrets.CARO_USER19 }}
-        CARO_PASSWD19: ${{ secrets.CARO_PASSWD19 }}
+        
         ARENA_MAX_GAMES: '3'
       run: python3 -u arena14.py
       timeout-minutes: 60
