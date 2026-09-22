@@ -84,17 +84,15 @@ requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
 CARO_USER_DIRECT = "arena14"
-CARO_PASSWD_DIRECT = "nhat123456"
+CARO_PASSWD_DIRECT = "******"
 
 def _clean_env(val, default):
     if val and str(val).strip():
         return str(val).strip()
     return default
 
-# Direct credentials are the default; environment variables are optional
-# overrides for local testing and are not required by the workflow.
-USER = _clean_env(os.environ.get("CARO_USER19"), CARO_USER_DIRECT)
-PASSWD = _clean_env(os.environ.get("CARO_PASSWD19"), CARO_PASSWD_DIRECT)
+USER = _clean_env(os.environ.get("CARO_USER18"), CARO_USER_DIRECT)
+PASSWD = _clean_env(os.environ.get("CARO_PASSWD18"), CARO_PASSWD_DIRECT)
 
 COOKIE = ""
 WS_URL = "wss://gamevh.net/ws/gameServer"
@@ -126,7 +124,9 @@ KICK_DELAY = 5.0
 SIT_ALONE_TIMEOUT = 300.0
 
 BOT_BET_XU = 10000
+# Create a private table every time; never use QUICK_PLAY or search/rejoin a table.
 BOT_USE_CREATE_TABLE = True
+CREATE_TABLE_ONLY = True
 BOT_MATCH_DURATION = '5'
 BOT_TURN_DURATION = '30'
 BOT_ACC_DURATION = '0'
@@ -830,6 +830,8 @@ class JieqiCupBot:
         self._quick_play_attempts = 0
         self._sit_alone_since = None
         self._table_created_by_me = False
+        self._ready_timer = None
+        self._last_ready_sent = 0.0
         self.bet_amts = []
         self._resolved_bet_id = None
         self._bet_amts_loaded = False
@@ -1047,11 +1049,32 @@ class JieqiCupBot:
         self.send_message(410, bytes(data))
 
     def send_ready(self, is_ready=1):
-        if self.board.is_playing: return
-        print("[GAME] ⏳ READY")
+        if not self.connected or not self.in_game or self.board.is_playing:
+            return False
+        now = time.time()
+        if is_ready and now - self._last_ready_sent < 1.0:
+            return False
+        self._last_ready_sent = now
+        print(f"[GAME] ✅ SET_READY={is_ready} table={self._table_path}", flush=True)
         data = bytearray()
         data.extend(self.conn.pack_byte(is_ready))
         self.send_message("SET_READY", bytes(data))
+        return True
+
+    def schedule_ready(self, reason, delay=0.5):
+        """Send SET_READY after table entry/opponent arrival, with one retry."""
+        if self.board.is_playing or not self.connected or not self.in_game:
+            return
+        print(f"[GAME] ⏳ Schedule SET_READY reason={reason} delay={delay}s", flush=True)
+        def worker():
+            time.sleep(delay)
+            if not self.connected or not self.in_game or self.board.is_playing:
+                return
+            self.send_ready(1)
+            time.sleep(1.5)
+            if self.connected and self.in_game and not self.board.is_playing:
+                self.send_ready(1)
+        threading.Thread(target=worker, daemon=True).start()
 
     def _handle_binary_message(self, data):
         cmd_for_log = "?"
@@ -1114,8 +1137,7 @@ class JieqiCupBot:
                 self._joining_table = False
                 self.in_game = True
                 self._enter_fail_at = time.time()
-                threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
-                                 daemon=True).start()
+                self.schedule_ready("enter_place_error", delay=0.5)
             return
         if self._joining_table:
             if is_block_software_message(msg.data):
@@ -1124,18 +1146,12 @@ class JieqiCupBot:
             self.in_game = True
             self._enter_fail_at = 0.0
             self.last_action_timestamp = time.time()
-            threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
-                             daemon=True).start()
+            self.schedule_ready("enter_place_ok", delay=0.5)
         elif not self.in_game:
-            if self._table_path and time.time() - self._table_path_ts < 180:
-                print(f"[TABLE] Rejoin: {self._table_path}")
-                self.in_game = True
-                self._joining_table = True
-                path = self._table_path
-                threading.Thread(target=lambda: (time.sleep(0.5),
-                                                  self.send_enter_place(path=path, mode=1)),
-                                 daemon=True).start()
-                return
+            # Do not rejoin an old table after reconnect. The bot must create a
+            # fresh table through CREATE_RULE instead of finding an existing one.
+            self._table_path = None
+            self._table_created_by_me = False
             self._bet_amts_loaded = False
             self._resolved_bet_id = None
             self.send_list_bet_amt()
@@ -1200,6 +1216,8 @@ class JieqiCupBot:
             if pid > 0 and pid != CURRENT_PLAYER_ID:
                 self.player_names[pid] = name
                 print(f"[PLAYER] 👤 '{name}' (id={pid})")
+                if not self.board.is_playing and self.in_game:
+                    self.schedule_ready("player_entered", delay=0.5)
                 if not self.board.is_playing and self.is_family_bot(name):
                     if self.opponent_player_id() == pid:
                         print(f"[AVOID] Ally bot -> leave")
@@ -1230,8 +1248,7 @@ class JieqiCupBot:
                         return
                     self._sit_alone_since = None
                     if not self.board.is_playing:
-                        threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
-                                         daemon=True).start()
+                        self.schedule_ready("opponent_slot_changed", delay=0.5)
                 else:
                     if not self.board.is_playing and self.opponent_player_id() is None:
                         print(f"[TABLE] No opponent, waiting {int(SIT_ALONE_TIMEOUT)}s...")
@@ -1566,7 +1583,7 @@ class JieqiCupBot:
             print("[GAME] 🔄 Ở lại bàn, sẵn sàng cho ván mới (không kick / không rời)...")
             time.sleep(3.0)
             if self.connected and not self.board.is_playing:
-                self.send_ready(1)
+                self.schedule_ready("gameover", delay=0.0)
 
         threading.Thread(target=after_gameover, daemon=True).start()
 
@@ -1726,23 +1743,17 @@ class JieqiCupBot:
                     if now - self._last_quick_play_time >= self._QUICK_PLAY_INTERVAL:
                         if not self._bet_amts_loaded:
                             self.send_list_bet_amt()
-                        elif BOT_USE_CREATE_TABLE:
+                        elif CREATE_TABLE_ONLY:
                             bid = (self._resolved_bet_id
                                    if self._resolved_bet_id is not None
                                    else self.resolve_bet_amt_id())
                             print(f"[CREATE] 🪑 Tạo bàn {BOT_BET_XU} xu (bet_id={bid})")
                             self.send_create_table(bet_amt_id=bid)
                         else:
-                            valid_bets = self.get_1k_to_5k_bet_objs()
-                            if valid_bets:
-                                bet_obj = random.choice(valid_bets)
-                                room = random.choice(self.ROOM_LIST)
-                                print(f"[SEARCH] 🔍 Dò bàn {bet_obj['value']} xu phòng '{room}'")
-                                self.send_quick_play(room_id=room, bet_amt_id=bet_obj['id'])
-                                self._quick_play_attempts += 1
-                            else:
-                                self.send_create_table()
-                                self._quick_play_attempts = 0
+                            # Defensive fallback: CREATE_RULE remains the only
+                            # supported matchmaking operation in this bot.
+                            print(f"[CREATE] 🪑 Tạo bàn {BOT_BET_XU} xu (fallback)")
+                            self.send_create_table()
                 time.sleep(1)
             except KeyboardInterrupt:
                 break
@@ -1800,7 +1811,7 @@ automatically logs into its own subdirectory:
 The <bot> name is resolved, in order, from:
     1. $WS_CAPTURE_DIR        — full directory override (skips the base dir)
     2. $WS_CAPTURE_BOT        — bot name only
-    3. $CARO_USER19           — bot account name (set by the workflows)
+    3. $CARO_USER18           — bot account name (set by the workflows)
     4. sys.argv[0] basename   — e.g. "arena15.py" -> "arena15"
     5. "default"
 
@@ -1846,7 +1857,7 @@ def _bot_name() -> str:
     explicit = os.environ.get("WS_CAPTURE_BOT")
     if explicit:
         return explicit
-    user = os.environ.get("CARO_USER19")
+    user = os.environ.get("CARO_USER18")
     if user:
         return user
     try:
