@@ -42,7 +42,7 @@ jobs:
 
     - name: Upload WS capture logs
       if: always()
-      uses: actions/upload-artifact@v14
+      uses: actions/upload-artifact@v4
       with:
         name: ws-capture-arena14
         path: ws_capture/
