@@ -830,6 +830,8 @@ class JieqiCupBot:
         self._quick_play_attempts = 0
         self._sit_alone_since = None
         self._table_created_by_me = False
+        self._ready_timer = None
+        self._last_ready_sent = 0.0
         self.bet_amts = []
         self._resolved_bet_id = None
         self._bet_amts_loaded = False
@@ -1047,11 +1049,32 @@ class JieqiCupBot:
         self.send_message(410, bytes(data))
 
     def send_ready(self, is_ready=1):
-        if self.board.is_playing: return
-        print("[GAME] ⏳ READY")
+        if not self.connected or not self.in_game or self.board.is_playing:
+            return False
+        now = time.time()
+        if is_ready and now - self._last_ready_sent < 1.0:
+            return False
+        self._last_ready_sent = now
+        print(f"[GAME] ✅ SET_READY={is_ready} table={self._table_path}", flush=True)
         data = bytearray()
         data.extend(self.conn.pack_byte(is_ready))
         self.send_message("SET_READY", bytes(data))
+        return True
+
+    def schedule_ready(self, reason, delay=0.5):
+        """Send SET_READY after table entry/opponent arrival, with one retry."""
+        if self.board.is_playing or not self.connected or not self.in_game:
+            return
+        print(f"[GAME] ⏳ Schedule SET_READY reason={reason} delay={delay}s", flush=True)
+        def worker():
+            time.sleep(delay)
+            if not self.connected or not self.in_game or self.board.is_playing:
+                return
+            self.send_ready(1)
+            time.sleep(1.5)
+            if self.connected and self.in_game and not self.board.is_playing:
+                self.send_ready(1)
+        threading.Thread(target=worker, daemon=True).start()
 
     def _handle_binary_message(self, data):
         cmd_for_log = "?"
@@ -1114,8 +1137,7 @@ class JieqiCupBot:
                 self._joining_table = False
                 self.in_game = True
                 self._enter_fail_at = time.time()
-                threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
-                                 daemon=True).start()
+                self.schedule_ready("enter_place_error", delay=0.5)
             return
         if self._joining_table:
             if is_block_software_message(msg.data):
@@ -1124,8 +1146,7 @@ class JieqiCupBot:
             self.in_game = True
             self._enter_fail_at = 0.0
             self.last_action_timestamp = time.time()
-            threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
-                             daemon=True).start()
+            self.schedule_ready("enter_place_ok", delay=0.5)
         elif not self.in_game:
             # Do not rejoin an old table after reconnect. The bot must create a
             # fresh table through CREATE_RULE instead of finding an existing one.
@@ -1195,6 +1216,8 @@ class JieqiCupBot:
             if pid > 0 and pid != CURRENT_PLAYER_ID:
                 self.player_names[pid] = name
                 print(f"[PLAYER] 👤 '{name}' (id={pid})")
+                if not self.board.is_playing and self.in_game:
+                    self.schedule_ready("player_entered", delay=0.5)
                 if not self.board.is_playing and self.is_family_bot(name):
                     if self.opponent_player_id() == pid:
                         print(f"[AVOID] Ally bot -> leave")
@@ -1225,8 +1248,7 @@ class JieqiCupBot:
                         return
                     self._sit_alone_since = None
                     if not self.board.is_playing:
-                        threading.Thread(target=lambda: (time.sleep(3.0), self.send_ready(1)),
-                                         daemon=True).start()
+                        self.schedule_ready("opponent_slot_changed", delay=0.5)
                 else:
                     if not self.board.is_playing and self.opponent_player_id() is None:
                         print(f"[TABLE] No opponent, waiting {int(SIT_ALONE_TIMEOUT)}s...")
@@ -1561,7 +1583,7 @@ class JieqiCupBot:
             print("[GAME] 🔄 Ở lại bàn, sẵn sàng cho ván mới (không kick / không rời)...")
             time.sleep(3.0)
             if self.connected and not self.board.is_playing:
-                self.send_ready(1)
+                self.schedule_ready("gameover", delay=0.0)
 
         threading.Thread(target=after_gameover, daemon=True).start()
 
