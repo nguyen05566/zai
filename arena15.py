@@ -134,7 +134,7 @@ BOT_BLOCK_SOFTWARE = '0'
 #   3 phut: clock 180s | cap 12s | clamp 36s | delay 1.8s
 #   2 phut: clock 120s | cap  8s | clamp 24s | delay 1.2s
 MATCH_CLOCK_SECONDS = float(BOT_MATCH_DURATION) * 60.0   # dong ho tong moi ben
-MAX_THINK_SECONDS = min(20.0, MATCH_CLOCK_SECONDS / 15.0)   # toi da ~6.7% clock/nuoc
+MAX_THINK_SECONDS = min(5.0, MATCH_CLOCK_SECONDS / 15.0)   # toi da ~6.7% clock/nuoc
 CLOCK_SAFETY_SECONDS = 5.0       # khong dip duoi vung an toan cuoi dong ho
 CLOCK_CHARGE_CLAMP_SECONDS = min(60.0, MATCH_CLOCK_SECONDS / 5.0)  # toi da ~20% clock/1 lan lag
 # Delay "nguoi" cung phai co lai: 3s x 30 nuoc = 90s la qua voi van ngan
