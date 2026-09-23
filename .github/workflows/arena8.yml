@@ -1,0 +1,47 @@
+name: arena8
+
+on:
+  workflow_dispatch:
+
+
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential
+
+    - name: Install Python dependencies
+      run: pip install websocket-client requests
+
+    - name: Build pinned JieqiCore engine
+      run: bash build_engine_jieqi_core.sh
+
+    - name: Verify engine
+      run: bash verify_jieqi_core.sh ./jieqi-core
+
+    - name: Run JieqiCore bot
+      env:
+        MISTBOARD_JIEQI_ENGINE: ./jieqi-core
+      run: python3 -u arena8.py
+      timeout-minutes: 340
+
+    - name: Upload WS capture logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ws-capture-arena8
+        path: ws_capture/
+        retention-days: 7
