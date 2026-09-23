@@ -26,17 +26,15 @@ jobs:
     - name: Install Python dependencies
       run: pip install websocket-client requests
 
-    - name: Build Mistboard-pinned PikaJieQi engine
-      run: bash build_engine_mistboard.sh
+    - name: Build pinned JieqiCore engine
+      run: bash build_engine_jieqi_core.sh
 
     - name: Verify engine
-      run: |
-        echo "uci" | ./pikajieqi-mistboard | head -3
-        ls -la pikajieqi-mistboard
+      run: bash verify_jieqi_core.sh ./jieqi-core
 
-    - name: Run Mistboard engine bot
+    - name: Run JieqiCore bot
       env:
-        MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
+        MISTBOARD_JIEQI_ENGINE: ./jieqi-core
       run: python3 -u arena5.py
       timeout-minutes: 340
 
