@@ -14,7 +14,10 @@ search_output="$({
   echo 'setoption name Threads value 1'
   echo 'setoption name Hash value 16'
   echo 'isready'
-  echo 'position startpos moves a3a4R'
+  # Replay public mover reveals, an open-mover dark capture (5 chars), and a
+  # dark-mover dark capture (6 chars). This is the protocol the fair adapter
+  # uses to keep JieqiCore's rest-piece pools synchronized.
+  echo 'position startpos moves a3a4P c6c5p a4a5 e6e5p a5b5 g6g5p b2b7Rn'
   echo 'go nodes 3000'
   echo 'quit'
 } | timeout 30 "$ENGINE")"

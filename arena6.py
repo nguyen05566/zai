@@ -23,6 +23,10 @@ import random
 import traceback
 import shutil
 import urllib.request, urllib.parse, http.cookiejar
+from jieqi_state_adapter import (
+    VALID_REVEALS, encode_jieqi_move, fen_piece_for_view,
+    resolve_move_reveals,
+)
 
 # ============================================================================
 # HTTP SESSION (giữ nguyên từ cup_bot.py)
@@ -391,7 +395,7 @@ INITIAL_BAG = {'A': 2, 'B': 2, 'N': 2, 'R': 2, 'C': 2, 'P': 5,
 BAG_ORDER = ['A', 'B', 'N', 'R', 'C', 'P', 'a', 'b', 'n', 'r', 'c', 'p']
 
 UCI_MOVE_RE = re.compile(r'^[a-i]\d[a-i]\d$')
-UCI_MOVE_WITH_SUFFIX_RE = re.compile(r'^[a-i]\d[a-i]\d[a-zA-Z]?$')
+UCI_MOVE_WITH_SUFFIX_RE = re.compile(r'^[a-i]\d[a-i]\d[a-zA-Z]{0,2}$')
 
 class XiangqiBoardTracker:
     INITIAL_FEN = "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w"
@@ -456,13 +460,14 @@ class XiangqiBoardTracker:
         self.revealed_chars = []
         self.dark_positions.clear()
 
-    def record_move(self, mv, revealed_char=None):
-        uci = mv + (revealed_char or "")
-        self.uci_moves.append(uci)
-        if revealed_char:
-            self.revealed_chars.append(revealed_char)
+    def record_move(self, mv, mover_reveal=None, captured_reveal=None):
+        token = encode_jieqi_move(mv, mover_reveal, captured_reveal)
+        self.uci_moves.append(token)
+        for ch in (mover_reveal, captured_reveal):
+            if ch:
+                self.revealed_chars.append(ch)
         self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
-        return uci
+        return token
 
     def set_my_slot(self, slot_id, first_turn_slot_id):
         self.my_slot_id = slot_id
@@ -518,10 +523,10 @@ class XiangqiBoardTracker:
         return True, "ok"
 
 class VisibleBoard:
-    """Tracks actual piece positions for 'see-all' mode.
+    """Tracks server truth without exposing covered roles to live search.
     
-    Maintains a 90-cell board with actual piece types (from raw_face).
-    Used to generate standard xiangqi FEN for the engine.
+    Maintains truth data from raw_face for diagnostics and post-event
+    reveal repair. Covered truth must never enter the live engine FEN.
     """
     TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
     
@@ -551,8 +556,10 @@ class VisibleBoard:
                 self.cells[position] = fen_char
     
     def apply_move(self, source_pos, target_pos):
-        """Move a piece from source to target."""
+        """Move truth data; an in-place flip keeps the piece on its square."""
         if 0 <= source_pos < 90 and 0 <= target_pos < 90:
+            if source_pos == target_pos:
+                return
             self.cells[target_pos] = self.cells[source_pos]
             self.cells[source_pos] = '.'
     
@@ -1311,7 +1318,7 @@ class JieqiCupBot:
                 if not is_open and 0 <= position < 90:
                     self.board.dark_positions.add(position)
                 piece_type = int(face[1]) if len(face) > 1 else 0
-                if piece_type == 7 and position not in STANDARD_PAWN_POSITIONS:
+                if is_open and piece_type == 7 and position not in STANDARD_PAWN_POSITIONS:
                     self.fixed_pawn_positions.add(position)
             if self.fixed_pawn_positions:
                 print(f"[GAME] 🛡️ {len(self.fixed_pawn_positions)} locked pawns")
@@ -1339,19 +1346,14 @@ class JieqiCupBot:
 
     def _rebuild_fen_with_current_flip(self, pieces):
         board = [['.' for _ in range(9)] for _ in range(10)]
+        hidden_count = 0
         for sid, face, position, is_open in pieces:
-            if position < 0 or position >= 90: continue
+            if position < 0 or position >= 90:
+                continue
             fen_row, col = self.board.pos_to_rc(position)
-            # ★ SEE ALL PIECES: use decoded face for ALL pieces (even hidden)
-            # Server sends raw_face = actual piece type for every piece
-            if len(face) > 1:
-                color = face[0]; piece_type = int(face[1])
-                type_to_fen = {1: 'k', 2: 'a', 3: 'b', 4: 'r',
-                               5: 'c', 6: 'n', 7: 'p'}
-                fen_char = type_to_fen.get(piece_type, '?')
-                if color == 'r': fen_char = fen_char.upper()
-            else:
-                fen_char = 'X' if sid.startswith('r') else 'x'
+            fen_char = fen_piece_for_view(sid, face, is_open)
+            if not is_open:
+                hidden_count += 1
             board[fen_row][col] = fen_char
         fen_rows = []
         for row in board:
@@ -1364,7 +1366,21 @@ class JieqiCupBot:
                     fen_row += cell
             if empty > 0: fen_row += str(empty)
             fen_rows.append(fen_row)
-        return '/'.join(fen_rows) + ' w'
+        result = '/'.join(fen_rows) + ' w'
+        leaked = sum(result.split(' ', 1)[0].count(ch)
+                     for ch in 'ABNRCPabnrcp')
+        open_non_kings = sum(
+            1 for _sid, face, position, is_open in pieces
+            if 0 <= position < 90 and is_open and len(face) > 1
+            and face[1].isdigit() and int(face[1]) != 1
+        )
+        if leaked != open_non_kings:
+            raise ValueError(
+                f"fair-state leak guard failed: visible={leaked} "
+                f"expected_open={open_non_kings} hidden={hidden_count}"
+            )
+        print(f"[LEAK-GUARD] hidden_faces_sent=0 hidden={hidden_count}", flush=True)
+        return result
 
     PIECE_TYPE_MAP = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
 
@@ -1393,9 +1409,7 @@ class JieqiCupBot:
                 if not UCI_MOVE_RE.match(engine_move):
                     self._move_error_count += 1
                     return
-                # ws_frame_dump is the single wire-decoding source. The
-                # message reader above only advances the protocol offset;
-                # reveal decoding comes from the shared MOVE event.
+
                 event = getattr(self, "_decoded_ws_event", None) or {}
                 event_source = event.get("source")
                 event_target = event.get("target")
@@ -1404,24 +1418,93 @@ class JieqiCupBot:
                         f"MOVE parser mismatch: wire={source_pos}->{target_pos} "
                         f"dump={event_source}->{event_target}"
                     )
-                mover_dark = source_pos in self.board.dark_positions
-                is_flip_move = (source_pos == target_pos)
-                revealed_char = event.get("revealed_piece")
-                if revealed_char in ('k', 'K'):
-                    revealed_char = None
-                if revealed_char and not (mover_dark or is_flip_move):
-                    print(f"[MOVE] parser reveal on open square: {revealed_char}", flush=True)
-                    revealed_char = None
-                self.board.dark_positions.discard(source_pos)
-                self.board.dark_positions.discard(target_pos)
-                full_uci = engine_move + (revealed_char or "")
                 now = time.time()
-                if (self._last_move_uci == full_uci
+                if (self._last_move_uci
+                        and self._last_move_uci[:4] == engine_move
                         and (now - self._last_move_time) < MOVE_DEDUP_WINDOW):
                     self._move_skip_count += 1
                     return
-                self.board.record_move(engine_move, revealed_char)
-                # ★ Update visible board
+
+                mover_dark = source_pos in self.board.dark_positions
+                is_flip_move = (source_pos == target_pos)
+                target_truth = (self.visible_board.cells[target_pos]
+                                if 0 <= target_pos < len(self.visible_board.cells)
+                                else None)
+                source_truth = (self.visible_board.cells[source_pos]
+                                if 0 <= source_pos < len(self.visible_board.cells)
+                                else None)
+                captured_dark = (
+                    not is_flip_move
+                    and target_pos in self.board.dark_positions
+                    and target_truth not in (None, '.', '?')
+                )
+                my_side = 'w' if self.board.is_red else 'b'
+                mover_is_bot = (
+                    self.board.is_red is not None
+                    and self.board.side_to_move == my_side
+                )
+                wire_reveal = event.get("revealed_piece")
+                mover_reveal, captured_reveal = resolve_move_reveals(
+                    wire_reveal=wire_reveal,
+                    mover_dark=mover_dark,
+                    flip_move=is_flip_move,
+                    captured_dark=captured_dark,
+                    mover_is_bot=mover_is_bot,
+                    source_truth=source_truth,
+                    target_truth=target_truth,
+                )
+
+                if (mover_dark or is_flip_move) and not mover_reveal:
+                    print(
+                        f"[KNOWLEDGE] missing mover reveal at pos={source_pos} "
+                        f"payload={event.get('payload_hex', '')}",
+                        flush=True,
+                    )
+                elif mover_reveal:
+                    if (wire_reveal and source_truth in VALID_REVEALS
+                            and wire_reveal != source_truth):
+                        print(
+                            f"[KNOWLEDGE] mover mismatch MOVE={wire_reveal} "
+                            f"START_MATCH={source_truth}; using {mover_reveal}",
+                            flush=True,
+                        )
+                    elif not wire_reveal:
+                        print(
+                            f"[KNOWLEDGE] mover reveal fallback={mover_reveal} "
+                            f"at pos={source_pos}",
+                            flush=True,
+                        )
+
+                if captured_dark and mover_is_bot:
+                    if captured_reveal:
+                        print(
+                            f"[KNOWLEDGE] captured reveal={captured_reveal} "
+                            f"at pos={target_pos}",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"[KNOWLEDGE] missing captured reveal at pos={target_pos}",
+                            flush=True,
+                        )
+                elif captured_dark:
+                    print(
+                        f"[KNOWLEDGE] opponent captured hidden piece at "
+                        f"pos={target_pos}; identity remains unknown",
+                        flush=True,
+                    )
+
+                full_uci = encode_jieqi_move(
+                    engine_move, mover_reveal, captured_reveal
+                )
+                self.board.dark_positions.discard(source_pos)
+                self.board.dark_positions.discard(target_pos)
+                recorded = self.board.record_move(
+                    engine_move, mover_reveal, captured_reveal
+                )
+                if recorded != full_uci:
+                    raise AssertionError(f"move encoding mismatch: {recorded} != {full_uci}")
+
                 src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
                 self.visible_board.apply_move(src_pos, tgt_pos)
                 self.visible_board.flip_side()
