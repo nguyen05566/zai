@@ -1,4 +1,4 @@
-name: Arena18 (Mistboard PikaJieQi)
+name: Arena18 (JieqiCore)
 
 on:
   workflow_dispatch:
@@ -24,17 +24,15 @@ jobs:
       - name: Install Python dependencies
         run: pip install websocket-client requests
 
-      - name: Build Mistboard PikaJieQi
-        run: bash build_engine_mistboard.sh
+      - name: Build pinned JieqiCore engine
+        run: bash build_engine_jieqi_core.sh
 
       - name: Verify engine
-        run: |
-          echo "uci" | ./pikajieqi-mistboard | grep -E '^(id name|uciok)$'
-          test -x ./pikajieqi-mistboard
+        run: bash verify_jieqi_core.sh ./jieqi-core
 
       - name: Run arena18 for three games
         env:
-          MISTBOARD_JIEQI_ENGINE: ./pikajieqi-mistboard
+          MISTBOARD_JIEQI_ENGINE: ./jieqi-core
           ARENA_MAX_GAMES: '300'
         run: python3 -u arena18.py
         timeout-minutes: 595
