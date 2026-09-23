@@ -1440,6 +1440,40 @@ class JieqiCupBot:
                 revealed_char = event.get("revealed_piece")
                 if revealed_char in ('k', 'K'):
                     revealed_char = None
+
+                # Primary source: the reveal byte in this live MOVE frame.
+                # Fallback: raw_face captured for the same piece at START_MATCH.
+                # This is in-memory state for the current game, never a JSONL
+                # record from an older game.
+                known_face = None
+                if mover_dark or is_flip_move:
+                    if 0 <= source_pos < len(self.visible_board.cells):
+                        candidate = self.visible_board.cells[source_pos]
+                        if candidate in ('A', 'B', 'N', 'R', 'C', 'P',
+                                         'a', 'b', 'n', 'r', 'c', 'p'):
+                            known_face = candidate
+                    if revealed_char and known_face and revealed_char != known_face:
+                        print(
+                            f"[RAW_FACE] mismatch MOVE={revealed_char} "
+                            f"START_MATCH={known_face} at pos={source_pos}; "
+                            "using START_MATCH",
+                            flush=True,
+                        )
+                        revealed_char = known_face
+                    elif not revealed_char and known_face:
+                        revealed_char = known_face
+                        print(
+                            f"[RAW_FACE] MOVE missing reveal; fallback "
+                            f"START_MATCH={known_face} at pos={source_pos}",
+                            flush=True,
+                        )
+                    elif not revealed_char:
+                        print(
+                            f"[RAW_FACE] missing at pos={source_pos} "
+                            f"payload={event.get('payload_hex', '')}",
+                            flush=True,
+                        )
+
                 if revealed_char and not (mover_dark or is_flip_move):
                     print(f"[MOVE] parser reveal on open square: {revealed_char}", flush=True)
                     revealed_char = None
@@ -1815,10 +1849,16 @@ The <bot> name is resolved, in order, from:
     4. sys.argv[0] basename   — e.g. "arena15.py" -> "arena15"
     5. "default"
 
-Log rotation
-------------
-frames.jsonl is size-capped (default 20 MB, keep 2 rotated copies) so a bot
-running for weeks cannot fill the disk. PING/PONG frames are not written by
+Per-match logs and rotation
+---------------------------
+By default, receiving START_MATCH truncates frames.jsonl, start_match.jsonl,
+and events.jsonl before the new match is written. This keeps the capture files
+scoped to exactly one game and prevents tools or people from accidentally
+mixing raw_face/reveal records from an older game. Set
+WS_CAPTURE_PER_MATCH=0 to restore the old append-across-games behaviour.
+
+The files are also size-capped (default 20 MB, keep 2 rotated copies) so one
+very long game cannot fill the disk. PING/PONG frames are not written by
 default (biggest noise source); set WS_CAPTURE_LOG_PING=1 to keep them.
 
 This module never raises: logging failures are swallowed after one warning so
@@ -1849,6 +1889,10 @@ def _keep_copies() -> int:
 
 def _log_ping() -> bool:
     return os.environ.get("WS_CAPTURE_LOG_PING", "") == "1"
+
+def _per_match_logs() -> bool:
+    # Safer default: one capture set belongs to one game only.
+    return os.environ.get("WS_CAPTURE_PER_MATCH", "1") != "0"
 
 def _base_dir() -> str:
     return os.environ.get("WS_CAPTURE_BASE", "ws_capture")
@@ -2044,6 +2088,25 @@ def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _truncate_log(path: Path) -> None:
+    """Create or atomically empty a private log file while holding the caller's
+    write lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.close(fd)
+
+
+def _start_new_match(out: Path) -> None:
+    """Discard captures from the previous game.
+
+    Called only after a valid START_MATCH command prefix has been decoded and
+    while _WRITE_LOCK is held. GAMEOVER intentionally does not clear anything:
+    the completed game's logs remain available until the next game begins.
+    """
+    for name in ("frames.jsonl", "start_match.jsonl", "events.jsonl"):
+        _truncate_log(out / name)
+
+
 def log_incoming_frame(data: bytes, directory: str | None = None) -> None:
     """Log one already-decrypted binary WebSocket message.
 
@@ -2068,6 +2131,12 @@ def log_incoming_frame(data: bytes, directory: str | None = None) -> None:
     try:
         with _WRITE_LOCK:
             out = _resolve_dir(directory)
+            # Reset before writing START_MATCH so all three files describe the
+            # same current game. The bot decodes this live frame in memory; it
+            # never reads these files back into game state.
+            if cmd == "START_MATCH" and _per_match_logs():
+                _start_new_match(out)
+
             _append_jsonl(out / "frames.jsonl", {
                 "timestamp": time.time(),
                 "bot": _bot_name(),

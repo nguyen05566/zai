@@ -1388,14 +1388,56 @@ class JieqiCupBot:
                 if not UCI_MOVE_RE.match(engine_move):
                     self._move_error_count += 1
                     return
-                rest = list(msg.data[msg.offset:]) if msg.offset < len(msg.data) else []
+                event = getattr(self, "_decoded_ws_event", None) or {}
+                event_source = event.get("source")
+                event_target = event.get("target")
+                if event_source != source_pos or event_target != target_pos:
+                    raise ValueError(
+                        f"MOVE parser mismatch: wire={source_pos}->{target_pos} "
+                        f"dump={event_source}->{event_target}"
+                    )
                 mover_dark = source_pos in self.board.dark_positions
                 is_flip_move = (source_pos == target_pos)
-                revealed_char = None
-                if (mover_dark or is_flip_move) and rest and rest[0] > 0 and len(rest) >= 3:
-                    cand = self._sid_to_fen_char(rest[2])
-                    if cand and cand not in ('k', 'K'):
-                        revealed_char = cand
+                revealed_char = event.get("revealed_piece")
+                if revealed_char in ('k', 'K'):
+                    revealed_char = None
+
+                # Primary source: the reveal byte in this live MOVE frame.
+                # Fallback: raw_face captured for the same piece at START_MATCH.
+                # This is in-memory state for the current game, never a JSONL
+                # record from an older game.
+                known_face = None
+                if mover_dark or is_flip_move:
+                    if 0 <= source_pos < len(self.visible_board.cells):
+                        candidate = self.visible_board.cells[source_pos]
+                        if candidate in ('A', 'B', 'N', 'R', 'C', 'P',
+                                         'a', 'b', 'n', 'r', 'c', 'p'):
+                            known_face = candidate
+                    if revealed_char and known_face and revealed_char != known_face:
+                        print(
+                            f"[RAW_FACE] mismatch MOVE={revealed_char} "
+                            f"START_MATCH={known_face} at pos={source_pos}; "
+                            "using START_MATCH",
+                            flush=True,
+                        )
+                        revealed_char = known_face
+                    elif not revealed_char and known_face:
+                        revealed_char = known_face
+                        print(
+                            f"[RAW_FACE] MOVE missing reveal; fallback "
+                            f"START_MATCH={known_face} at pos={source_pos}",
+                            flush=True,
+                        )
+                    elif not revealed_char:
+                        print(
+                            f"[RAW_FACE] missing at pos={source_pos} "
+                            f"payload={event.get('payload_hex', '')}",
+                            flush=True,
+                        )
+
+                if revealed_char and not (mover_dark or is_flip_move):
+                    print(f"[MOVE] parser reveal on open square: {revealed_char}", flush=True)
+                    revealed_char = None
                 self.board.dark_positions.discard(source_pos)
                 self.board.dark_positions.discard(target_pos)
                 full_uci = engine_move + (revealed_char or "")
