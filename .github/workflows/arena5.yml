@@ -1,4 +1,4 @@
-name: Arena14
+name: Arena5
 
 on:
   workflow_dispatch:
