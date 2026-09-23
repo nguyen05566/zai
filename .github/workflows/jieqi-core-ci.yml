@@ -1,0 +1,26 @@
+name: JieqiCore integration
+
+on:
+  pull_request:
+    paths:
+      - 'build_engine_jieqi_core.sh'
+      - 'verify_jieqi_core.sh'
+      - 'jieqi-core.ref'
+      - '.github/workflows/*mistboard.yml'
+      - '.github/workflows/arena*.yml'
+      - '.github/workflows/jieqi-core-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned JieqiCore
+        run: bash build_engine_jieqi_core.sh
+      - name: Verify bot protocol
+        run: bash verify_jieqi_core.sh ./jieqi-core
