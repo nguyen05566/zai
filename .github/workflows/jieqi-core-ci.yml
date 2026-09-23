@@ -6,6 +6,11 @@ on:
       - 'build_engine_jieqi_core.sh'
       - 'verify_jieqi_core.sh'
       - 'jieqi-core.ref'
+      - 'arena*.py'
+      - 'cup_bot_mistboard.py'
+      - 'jieqi_state_adapter.py'
+      - 'test_jieqi_state_adapter.py'
+      - 'test_fair_bot_state.py'
       - '.github/workflows/*mistboard.yml'
       - '.github/workflows/arena*.yml'
       - '.github/workflows/jieqi-core-ci.yml'
@@ -15,6 +20,23 @@ permissions:
   contents: read
 
 jobs:
+  adapter-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile bot adapters
+        run: |
+          python -m py_compile \
+            jieqi_state_adapter.py \
+            arena5.py arena6.py arena14.py arena15.py \
+            arena18.py arena19.py cup_bot_mistboard.py
+      - name: Test fair information boundary
+        run: python -m unittest -v test_jieqi_state_adapter.py test_fair_bot_state.py
+
   build-and-verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
