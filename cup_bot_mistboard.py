@@ -753,26 +753,21 @@ class MistboardJieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # ★ SEE ALL MODE — gửi "position fen <fen>" với ký tự quân thật
-            # thay vì "position startpos" với placeholder X/x.
-            # Engine nhận bàn cờ ngửa hoàn toàn và tính nước như cờ tướng
-            # tiêu chuẩn → tỷ lệ thắng xấp xỉ 100%.
-            # Bật/tắt qua env SEE_ALL (mặc định "1" = bật).
-            # force_startpos=True cho phép fallback nếu See All fail.
-            see_all = (not force_startpos) and os.environ.get("SEE_ALL", "1") != "0"
-            if see_all and fen and ('X' not in fen and 'x' not in fen and '?' not in fen):
-                # FEN đã là see-all (không có placeholder úp, không có '?') → dùng position fen
-                # Bỏ suffix reveal (vd "c3c4N" -> "c3c4") vì engine có FEN
-                # đầy đủ, không cần học qua reveal.
-                pure_moves = [m[:4] for m in moves if len(m) >= 4]
-                cmd = f"position fen {fen}"
-                if pure_moves:
-                    cmd += " moves " + " ".join(pure_moves)
-            else:
-                # Fallback: chế độ PikaJieQi gốc — "startpos" + reveal-suffix
-                cmd = "position startpos"
-                if moves:
-                    cmd += " moves " + " ".join(moves)
+            # ★ Engine command — chế độ STARTPOS + REVEAL-SUFFIX MOVES
+            # Phù hợp với cờ úp: engine tự track piece type qua suffix
+            # (vd "c3c4B" = Pawn c3→c4, revealed as Bishop).
+            #
+            # LƯU Ý: See All (gửi position fen <see_all_fen>) KHÔNG hoạt động
+            # trên server GameVH vì raw_face trong START_MATCH không phải type
+            # thật — chỉ là ID/placeholder khớp vị trí standard. Type thực
+            # chỉ được gửi qua reveal_byte trong gói MOVE khi quân lật.
+            # Xem log workflow #6: pos=25 raw_face=0x2a (Cannon) nhưng
+            # server reveal khi di chuyển là 'A' (Advisor).
+            #
+            # Env SEE_ALL=1 chỉ giữ để debug/skip, không thay đổi logic.
+            cmd = "position startpos"
+            if moves:
+                cmd += " moves " + " ".join(moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -1336,9 +1331,7 @@ class JieqiCupBot:
             if self.fixed_pawn_positions:
                 print(f"[GAME] 🛡️ {len(self.fixed_pawn_positions)} locked pawns")
             self.board.revealed_chars = []
-            see_all = os.environ.get("SEE_ALL", "1") != "0"
-            print(f"[SEE-ALL] mode={'ON' if see_all else 'OFF'} — "
-                  f"visible_board.cells={'populated' if any(c != '.' for c in self.visible_board.cells) else 'empty'}")
+            # (visible_board vẫn được track để debug, nhưng không dùng cho engine)
             print(f"[FEN] 📋 {self.board.start_fen}")
             print(f"[START] BAG={self.board.bag_string()}")
             print(f"[START] dark={len(self.board.dark_positions)} | "
@@ -1607,28 +1600,20 @@ class JieqiCupBot:
         # ★ Adaptive movetime: dùng 60% thời gian còn lại, max 3000ms, min 500ms
         # Trước đây luôn cứng 3000ms → nếu remain<4s sẽ tràn giờ.
         movetime_ms = max(500, min(3000, int(remain * 1000 * 0.6)))
-        # ★ SEE ALL: dùng FEN từ visible_board (quân thật, không X/x placeholder)
-        # thay vì board.get_current_fen() vốn vẫn chứa X/x cho quân úp.
-        # visible_board đã được set_from_pieces() ở _handle_start_match và
-        # apply_move() ở _handle_move — đồng bộ với mỗi nước đi.
-        see_all = os.environ.get("SEE_ALL", "1") != "0"
-        if see_all:
-            fen = self.visible_board.to_fen()
-            _, moves = self.board.get_current_fen()
-            print(f"[SEE-ALL] active — Engine nhận FEN ngửa hoàn toàn", flush=True)
-        else:
-            fen, moves = self.board.get_current_fen()
+        # ★ Dùng board.get_current_fen() — trả về (start_fen, uci_moves)
+        # Engine nhận 'position startpos moves <reveal-suffix moves>' và
+        # tự track piece type qua suffix (vd "c3c4B" = revealed Bishop).
+        # Đây là cơ chế ĐÚNG cho cờ úp — See All FEN không dùng được vì
+        # server GameVH không gửi type thật trong START_MATCH raw_face.
+        fen, moves = self.board.get_current_fen()
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
         print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
               flush=True)
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
         if not raw:
-            print("[ENGINE] -> no bestmove (See All), retry with startpos mode...", flush=True)
-            # ★ Fallback: retry với force_startpos=True (bỏ See All)
-            # Trường hợp engine không hỗ trợ 'position fen' hoặc FEN sai.
+            print("[ENGINE] -> no bestmove, retrying...", flush=True)
             if self.engine.restart():
-                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms,
-                                                force_startpos=True)
+                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
             if not raw:
                 print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True)
                 return
