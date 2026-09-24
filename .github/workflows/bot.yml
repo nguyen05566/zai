@@ -1,0 +1,65 @@
+name: See All Bot (Cờ Úp → Cờ Ngửa)
+
+# Workflow kích hoạt chế độ See All — bot đọc trực tiếp face_decoded
+# từ packet START_MATCH (bỏ qua is_open), dựng FEN ngửa hoàn toàn
+# và gửi cho jieqi-core engine qua "position fen <fen>".
+# Engine tính nước như cờ tướng tiêu chuẩn → tỷ lệ thắng xấp xỉ 100%.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'   # tự chạy mỗi 6 tiếng
+
+concurrency:
+  group: see-all-bot-jieqi
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build pinned JieqiCore engine
+        run: bash build_engine_jieqi_core.sh
+
+      - name: Verify engine
+        run: bash verify_jieqi_core.sh ./jieqi-core
+
+      - name: Run See All bot
+        env:
+          CARO_USER19: ${{ secrets.CARO_USER19 }}
+          CARO_PASSWD19: ${{ secrets.CARO_PASSWD19 }}
+          MISTBOARD_JIEQI_ENGINE: ./jieqi-core
+          SEE_ALL: '1'                          # ← Kích hoạt See All
+          WS_CAPTURE_MAX_BYTES: '20971520'
+          WS_CAPTURE_KEEP: '2'
+        run: |
+          python3 -u cup_bot_mistboard.py
+        timeout-minutes: 340
+
+      - name: Upload WS capture logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ws-capture-see-all-bot
+          path: ws_capture/
+          retention-days: 7

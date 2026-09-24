@@ -746,13 +746,25 @@ class MistboardJieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # ★ Use "position startpos moves ..." — PikaJieQi's native format
-            # PikaJieQi auto-tracks BAG and dark piece reveals from move suffixes
-            # BAG updates correctly: c3c4N → N2→N1 in BAG
-            # Engine uses BAG for expected value calculation in flip_search
-            cmd = "position startpos"
-            if moves:
-                cmd += " moves " + " ".join(moves)
+            # ★ SEE ALL MODE — gửi "position fen <fen>" với ký tự quân thật
+            # thay vì "position startpos" với placeholder X/x.
+            # Engine nhận bàn cờ ngửa hoàn toàn và tính nước như cờ tướng
+            # tiêu chuẩn → tỷ lệ thắng xấp xỉ 100%.
+            # Bật/tắt qua env SEE_ALL (mặc định "1" = bật).
+            see_all = os.environ.get("SEE_ALL", "1") != "0"
+            if see_all and fen and ('X' not in fen and 'x' not in fen):
+                # FEN đã là see-all (không có placeholder úp) → dùng position fen
+                # Bỏ suffix reveal (vd "c3c4N" -> "c3c4") vì engine có FEN
+                # đầy đủ, không cần học qua reveal.
+                pure_moves = [m[:4] for m in moves if len(m) >= 4]
+                cmd = f"position fen {fen}"
+                if pure_moves:
+                    cmd += " moves " + " ".join(pure_moves)
+            else:
+                # Fallback: chế độ PikaJieQi gốc — "startpos" + reveal-suffix
+                cmd = "position startpos"
+                if moves:
+                    cmd += " moves " + " ".join(moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
@@ -1316,6 +1328,9 @@ class JieqiCupBot:
             if self.fixed_pawn_positions:
                 print(f"[GAME] 🛡️ {len(self.fixed_pawn_positions)} locked pawns")
             self.board.revealed_chars = []
+            see_all = os.environ.get("SEE_ALL", "1") != "0"
+            print(f"[SEE-ALL] mode={'ON' if see_all else 'OFF'} — "
+                  f"visible_board.cells={'populated' if any(c != '.' for c in self.visible_board.cells) else 'empty'}")
             print(f"[FEN] 📋 {self.board.start_fen}")
             print(f"[START] BAG={self.board.bag_string()}")
             print(f"[START] dark={len(self.board.dark_positions)} | "
@@ -1580,7 +1595,17 @@ class JieqiCupBot:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
         movetime_ms = 3000
-        fen, moves = self.board.get_current_fen()
+        # ★ SEE ALL: dùng FEN từ visible_board (quân thật, không X/x placeholder)
+        # thay vì board.get_current_fen() vốn vẫn chứa X/x cho quân úp.
+        # visible_board đã được set_from_pieces() ở _handle_start_match và
+        # apply_move() ở _handle_move — đồng bộ với mỗi nước đi.
+        see_all = os.environ.get("SEE_ALL", "1") != "0"
+        if see_all:
+            fen = self.visible_board.to_fen()
+            _, moves = self.board.get_current_fen()
+            print(f"[SEE-ALL] active — Engine nhận FEN ngửa hoàn toàn", flush=True)
+        else:
+            fen, moves = self.board.get_current_fen()
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
         print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
               flush=True)
