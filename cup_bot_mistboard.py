@@ -537,6 +537,10 @@ class VisibleBoard:
         """Set board from START_MATCH pieces list.
         pieces: [(sid, face, position, is_open), ...]
         flip: board flip state (from XiangqiBoardTracker)
+
+        ★ See All fix: bỏ qua quân có piece_type=0 (raw_face=0, server
+        giấu type) — để cell='.' thay vì '?' để FEN không bị invalid.
+        Engine sẽ thấy ô trống thay vì ký tự lạ.
         """
         self.cells = ['.'] * 90
         for sid, face, position, is_open in pieces:
@@ -545,6 +549,9 @@ class VisibleBoard:
             if len(face) >= 2:
                 color = face[0]  # 'r' or 'b'
                 piece_type = int(face[1])
+                # ★ Skip unknown piece types (raw_face=0 case)
+                if piece_type == 0 or piece_type not in self.TYPE_TO_FEN:
+                    continue
                 fen_char = self.TYPE_TO_FEN.get(piece_type, '?')
                 if color == 'r':
                     fen_char = fen_char.upper()
@@ -737,7 +744,7 @@ class MistboardJieqiEngine:
         self._init_engine()
         return self.alive()
 
-    def get_best_move(self, fen, moves, movetime_ms=2000):
+    def get_best_move(self, fen, moves, movetime_ms=2000, force_startpos=False):
         if not self.alive():
             if not self.restart():
                 return None
@@ -751,9 +758,10 @@ class MistboardJieqiEngine:
             # Engine nhận bàn cờ ngửa hoàn toàn và tính nước như cờ tướng
             # tiêu chuẩn → tỷ lệ thắng xấp xỉ 100%.
             # Bật/tắt qua env SEE_ALL (mặc định "1" = bật).
-            see_all = os.environ.get("SEE_ALL", "1") != "0"
-            if see_all and fen and ('X' not in fen and 'x' not in fen):
-                # FEN đã là see-all (không có placeholder úp) → dùng position fen
+            # force_startpos=True cho phép fallback nếu See All fail.
+            see_all = (not force_startpos) and os.environ.get("SEE_ALL", "1") != "0"
+            if see_all and fen and ('X' not in fen and 'x' not in fen and '?' not in fen):
+                # FEN đã là see-all (không có placeholder úp, không có '?') → dùng position fen
                 # Bỏ suffix reveal (vd "c3c4N" -> "c3c4") vì engine có FEN
                 # đầy đủ, không cần học qua reveal.
                 pure_moves = [m[:4] for m in moves if len(m) >= 4]
@@ -1591,10 +1599,14 @@ class JieqiCupBot:
         now = time.time()
         deadline = self._turn_deadline if self._turn_deadline > 0 else (now + MOVE_DEADLINE_SECONDS)
         remain = deadline - now
-        if remain < 4.0:
+        # ★ Lower threshold 4.0 → 2.0 để bot vẫn cố đi khi còn ít giờ
+        # (kết hợp adaptive movetime bên dưới)
+        if remain < 2.0:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
-        movetime_ms = 3000
+        # ★ Adaptive movetime: dùng 60% thời gian còn lại, max 3000ms, min 500ms
+        # Trước đây luôn cứng 3000ms → nếu remain<4s sẽ tràn giờ.
+        movetime_ms = max(500, min(3000, int(remain * 1000 * 0.6)))
         # ★ SEE ALL: dùng FEN từ visible_board (quân thật, không X/x placeholder)
         # thay vì board.get_current_fen() vốn vẫn chứa X/x cho quân úp.
         # visible_board đã được set_from_pieces() ở _handle_start_match và
@@ -1611,9 +1623,12 @@ class JieqiCupBot:
               flush=True)
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
         if not raw:
-            print("[ENGINE] -> no bestmove, retrying...", flush=True)
+            print("[ENGINE] -> no bestmove (See All), retry with startpos mode...", flush=True)
+            # ★ Fallback: retry với force_startpos=True (bỏ See All)
+            # Trường hợp engine không hỗ trợ 'position fen' hoặc FEN sai.
             if self.engine.restart():
-                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
+                raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms,
+                                                force_startpos=True)
             if not raw:
                 print("[ENGINE] ❌ Không có nước — bỏ lượt", flush=True)
                 return
@@ -1697,7 +1712,7 @@ class JieqiCupBot:
 
                 if (self.board.is_playing and self.board.is_my_turn
                         and self._turn_deadline > 0
-                        and time.time() > self._turn_deadline - 4.0
+                        and time.time() > self._turn_deadline - 8.0
                         and not self._played_this_turn):
                     if not self._thinking:
                         print(f"[DEADLINE] Còn {int(self._turn_deadline - time.time())}s")
