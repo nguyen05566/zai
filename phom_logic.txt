@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Small deterministic Phỏm hand evaluator used by the WebSocket bot."""
+from __future__ import annotations
+
+from functools import lru_cache
+from itertools import combinations
+
+RANK_NAMES = ("A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K")
+SUIT_NAMES = ("S0", "S1", "S2", "S3")
+
+
+def valid_card(card: int) -> bool:
+    return isinstance(card, int) and 0 <= card < 52
+
+
+def rank(card: int) -> int:
+    return card % 13
+
+
+def suit(card: int) -> int:
+    return card // 13
+
+
+def point(card: int) -> int:
+    return rank(card) + 1
+
+
+def card_name(card: int) -> str:
+    if not valid_card(card):
+        return "??"
+    return f"{RANK_NAMES[rank(card)]}-{SUIT_NAMES[suit(card)]}({card})"
+
+
+def meld_masks(cards: list[int]) -> list[int]:
+    """Return every set/run mask available in this concrete card list."""
+    masks: set[int] = set()
+    by_rank: dict[int, list[int]] = {}
+    by_suit: dict[int, list[tuple[int, int]]] = {}
+    for index, card in enumerate(cards):
+        if not valid_card(card):
+            continue
+        by_rank.setdefault(rank(card), []).append(index)
+        by_suit.setdefault(suit(card), []).append((rank(card), index))
+
+    for indices in by_rank.values():
+        if len(indices) >= 3:
+            # A four-of-a-kind may be kept whole or as any three-card set.
+            full = sum(1 << index for index in indices)
+            masks.add(full)
+            if len(indices) == 4:
+                for omitted in indices:
+                    masks.add(full & ~(1 << omitted))
+
+    for values in by_suit.values():
+        values.sort()
+        for start in range(len(values)):
+            for end in range(start + 3, len(values) + 1):
+                segment = values[start:end]
+                ranks = [item[0] for item in segment]
+                if all(ranks[i] + 1 == ranks[i + 1] for i in range(len(ranks) - 1)):
+                    masks.add(sum(1 << item[1] for item in segment))
+                elif ranks[-1] - ranks[0] >= len(ranks):
+                    break
+    return sorted(masks)
+
+
+def best_meld_partition(cards: list[int]) -> tuple[int, list[list[int]]]:
+    """Return minimum deadwood points and one optimal disjoint meld partition."""
+    concrete = [card for card in cards if valid_card(card)]
+    cards = concrete
+    masks = meld_masks(cards)
+    mask_points = {
+        mask: sum(point(cards[i]) for i in range(len(cards)) if mask & (1 << i))
+        for mask in masks
+    }
+
+    @lru_cache(maxsize=None)
+    def saved(used: int) -> tuple[int, tuple[int, ...]]:
+        best_value: int = 0
+        best_partition: tuple[int, ...] = ()
+        for mask in masks:
+            if used & mask:
+                continue
+            child_value, child_partition = saved(used | mask)
+            candidate_value = mask_points[mask] + child_value
+            candidate_partition = (mask, *child_partition)
+            candidate_covered = sum(item.bit_count() for item in candidate_partition)
+            best_covered = sum(item.bit_count() for item in best_partition)
+            if ((candidate_value, candidate_covered, -len(candidate_partition))
+                    > (best_value, best_covered, -len(best_partition))):
+                best_value = candidate_value
+                best_partition = candidate_partition
+        return best_value, best_partition
+
+    saved_points, partition_masks = saved(0)
+    groups = [
+        [cards[i] for i in range(len(cards)) if mask & (1 << i)]
+        for mask in partition_masks
+    ]
+    return sum(point(card) for card in cards) - saved_points, groups
+
+
+def best_deadwood(cards: list[int]) -> tuple[int, set[int]]:
+    """Return minimum deadwood points and indices covered by disjoint melds."""
+    concrete = [card for card in cards if valid_card(card)]
+    deadwood, groups = best_meld_partition(concrete)
+    remaining = list(enumerate(concrete))
+    covered: set[int] = set()
+    for group in groups:
+        for card in group:
+            for index, candidate in remaining:
+                if index not in covered and candidate == card:
+                    covered.add(index)
+                    break
+    return deadwood, covered
+
+
+def can_cover_required_cards(cards: list[int], required_cards: list[int]) -> bool:
+    """Whether disjoint melds can cover every mandatory (eaten) card."""
+    concrete = [card for card in cards if valid_card(card)]
+    required = [card for card in required_cards if valid_card(card)]
+    if not required:
+        return True
+    combined = list(dict.fromkeys([*concrete, *required]))
+    required_mask = 0
+    for card in required:
+        if card not in combined:
+            return False
+        required_mask |= 1 << combined.index(card)
+    masks = meld_masks(combined)
+
+    @lru_cache(maxsize=None)
+    def search(used: int) -> bool:
+        if used & required_mask == required_mask:
+            return True
+        return any(not (used & mask) and search(used | mask) for mask in masks)
+
+    return search(0)
+
+
+def choose_discard(cards: list[int], required_cards: list[int] | None = None,
+                   forbidden_cards: set[int] | None = None) -> int | None:
+    """Choose a legal discard, minimizing deadwood after the discard.
+
+    ``required_cards`` are previously eaten cards: every one must remain
+    covered by a meld after the discard. ``forbidden_cards`` prevents retrying
+    a card rejected by the authoritative server.
+    """
+    concrete = [card for card in cards if valid_card(card)]
+    required = required_cards or []
+    forbidden = forbidden_cards or set()
+    if not concrete:
+        return None
+    candidates = []
+    for index, card in enumerate(concrete):
+        if card in forbidden:
+            continue
+        remaining = concrete[:index] + concrete[index + 1:]
+        if not can_cover_required_cards(remaining, required):
+            continue
+        deadwood, _groups = best_meld_partition([*remaining, *required])
+        neighbor_count = sum(
+            1 for other in remaining
+            if suit(other) == suit(card) and abs(rank(other) - rank(card)) <= 2
+        )
+        same_rank = sum(1 for other in remaining if rank(other) == rank(card))
+        candidates.append((deadwood, neighbor_count + same_rank * 2, -point(card), card))
+    return min(candidates)[3] if candidates else None
+
+
+def can_form_meld_with(cards: list[int], offered: int | None) -> bool:
+    if offered is None or not valid_card(offered):
+        return False
+    combined = [card for card in cards if valid_card(card)] + [offered]
+    offered_index = len(combined) - 1
+    return any(mask & (1 << offered_index) for mask in meld_masks(combined))
+
+
+def is_meld(cards: list[int]) -> bool:
+    cards = [card for card in cards if valid_card(card)]
+    if len(cards) < 3 or len(set(cards)) != len(cards):
+        return False
+    ranks = [rank(card) for card in cards]
+    suits = [suit(card) for card in cards]
+    is_set = len(cards) <= 4 and len(set(ranks)) == 1
+    ordered = sorted(ranks)
+    is_run = (len(set(suits)) == 1
+              and all(ordered[i] + 1 == ordered[i + 1]
+                      for i in range(len(ordered) - 1)))
+    return is_set or is_run
+
+
+def can_extend_public_meld(public_cards: list[int], card: int) -> bool:
+    """Whether card can legally extend at least one exposed meld.
+
+    A player's exposed line can contain several melds without boundary markers,
+    so inspect all concrete subsets. Phỏm hands are tiny, keeping this cheap.
+    """
+    concrete = list(dict.fromkeys(
+        value for value in public_cards if valid_card(value) and value != card
+    ))
+    for size in range(3, len(concrete) + 1):
+        for subset in combinations(concrete, size):
+            if is_meld(list(subset)) and is_meld([*subset, card]):
+                return True
+    return False
+
+
+def choose_send_card(hand: list[int], exposed_lines: list[list[int]]) -> int | None:
+    candidates = [
+        card for card in hand if valid_card(card)
+        and any(can_extend_public_meld(line, card) for line in exposed_lines)
+    ]
+    # Prefer sending the highest deadwood value.
+    return max(candidates, key=lambda card: (point(card), card), default=None)
