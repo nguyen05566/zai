@@ -1,0 +1,56 @@
+name: Research Cờ Úp Protocol
+
+# Nghiên cứu giao thức: login bằng arena7, vào mystery_xiangqi lobby,
+# gửi ENTER_PLACE / LIST_ZONE_ROOM / LIST_BET_AMT / GET_TABLE_DATA,
+# dump mọi packet ra artifact để phân tích raw_face vs type thật.
+
+on:
+  workflow_dispatch:
+    inputs:
+      observe_seconds:
+        description: 'Thời gian quan sát (giây)'
+        required: false
+        default: '120'
+        type: string
+
+concurrency:
+  group: research-coup
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run research script
+        env:
+          # User có thể override qua secret RESEARCH_USER / RESEARCH_PASS,
+          # nếu không set thì default là arena7 / nhat123456
+          CARO_USER19: ${{ secrets.RESEARCH_USER || 'arena7' }}
+          CARO_PASSWD19: ${{ secrets.RESEARCH_PASS || 'nhat123456' }}
+          OBSERVE_SECONDS: ${{ inputs.observe_seconds || '120' }}
+          RESEARCH_OUT: ./research_out
+        run: |
+          python3 -u research_coup.py
+
+      - name: Upload research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coup-research-${{ github.run_id }}
+          path: research_out/
+          retention-days: 14
