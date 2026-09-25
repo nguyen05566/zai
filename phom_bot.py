@@ -44,6 +44,31 @@ from pathlib import Path
 
 import websocket
 
+# Optional PIMC engine — loaded lazily only when PHOM_PIMC=1
+_PIMC_ENGINE = None
+def _get_pimc():
+    global _PIMC_ENGINE
+    if _PIMC_ENGINE is None:
+        try:
+            import pimc_engine
+            _PIMC_ENGINE = pimc_engine
+        except ImportError:
+            _PIMC_ENGINE = False
+    return _PIMC_ENGINE if _PIMC_ENGINE else None
+
+
+# Optional IS-MCTS engine — loaded lazily only when PHOM_ISMCTS=1
+_ISMCTS_ENGINE = None
+def _get_ismcts():
+    global _ISMCTS_ENGINE
+    if _ISMCTS_ENGINE is None:
+        try:
+            import ismcts_engine
+            _ISMCTS_ENGINE = ismcts_engine
+        except ImportError:
+            _ISMCTS_ENGINE = False
+    return _ISMCTS_ENGINE if _ISMCTS_ENGINE else None
+
 # ===========================================================================
 # Section A — Card primitives
 # ===========================================================================
@@ -972,6 +997,7 @@ class PhomTableBot:
                 for item in self.exposed_melds
             ],
             "skipped_eat_cards": [dict(item) for item in self.skipped_eat_cards],
+            "last_discard": self.last_discard,
         }
 
     def rebuild_exposed_melds(self, slot_id: int | None = None) -> None:
@@ -1100,8 +1126,35 @@ class PhomTableBot:
                 sent = self.send_state_action(state, "TAKE")
             elif code == "eat":
                 hand = self.current_hand()
-                if (self._state_command(state, "EAT") is not None
+                # IS-MCTS for eat decision (if enabled via PHOM_ISMCTS=1)
+                should_eat = None
+                ismcts = _get_ismcts()
+                if (ismcts is not None and ismcts.ISMCTS_ENABLED
+                        and self._state_command(state, "EAT") is not None
+                        and self.last_discard is not None
                         and can_form_meld_with(hand, self.last_discard)):
+                    try:
+                        should_eat = ismcts.ismcts_decide_eat(
+                            hand,
+                            self.last_discard,
+                            self.public_state_snapshot(),
+                            self.my_slot_id,
+                            required_cards=self.own_eaten_cards(),
+                            round_idx=self.my_discard_count,
+                        )
+                    except Exception as e:
+                        print(f"[IS-MCTS] error: {e} — falling back to "
+                              f"heuristic", flush=True)
+                        should_eat = None
+
+                if should_eat is not None:
+                    # IS-MCTS decided
+                    sent = self.send_state_action(
+                        state, "EAT" if should_eat else "TAKE"
+                    )
+                elif (self._state_command(state, "EAT") is not None
+                        and can_form_meld_with(hand, self.last_discard)):
+                    # Fallback: original heuristic — eat if forms meld
                     sent = self.send_state_action(state, "EAT")
                 else:
                     sent = self.send_state_action(state, "TAKE")
@@ -1116,15 +1169,37 @@ class PhomTableBot:
                 if send_card is not None:
                     sent = self.send_state_action(state, "SEND_CARD", [send_card])
                 else:
-                    discard = choose_discard_ai(
-                        self.current_hand(),
-                        self.public_state_snapshot(),
-                        self.my_slot_id,
-                        required_cards=self.own_eaten_cards(),
-                        forbidden_cards=self.rejected_discards,
-                        round_idx=self.my_discard_count,
-                        is_final_round=(code == "finalRemove"),
-                    )
+                    discard = None
+                    # PIMC for any remove state (if enabled via PHOM_PIMC=1)
+                    # Originally only finalRemove, but server rarely triggers
+                    # that state — extend to all remove states for impact.
+                    pimc = _get_pimc()
+                    if pimc is not None and pimc.PIMC_ENABLED:
+                        try:
+                            discard = pimc.pimc_choose_discard(
+                                self.current_hand(),
+                                self.public_state_snapshot(),
+                                self.my_slot_id,
+                                required_cards=self.own_eaten_cards(),
+                                forbidden_cards=self.rejected_discards,
+                                round_idx=self.my_discard_count,
+                                is_final_round=(code == "finalRemove"),
+                            )
+                        except Exception as e:
+                            print(f"[PIMC] error: {e} — falling back to "
+                                  f"heuristic", flush=True)
+                            discard = None
+                    # Fallback to heuristic
+                    if discard is None:
+                        discard = choose_discard_ai(
+                            self.current_hand(),
+                            self.public_state_snapshot(),
+                            self.my_slot_id,
+                            required_cards=self.own_eaten_cards(),
+                            forbidden_cards=self.rejected_discards,
+                            round_idx=self.my_discard_count,
+                            is_final_round=(code == "finalRemove"),
+                        )
                     if discard is not None:
                         sent = self.send_state_action(state, "REMOVE", [discard])
                     else:

@@ -1,7 +1,6 @@
 name: Phỏm Bot Auto-Play
 
 on:
-  # Trigger manually from the Actions tab
   workflow_dispatch:
     inputs:
       games:
@@ -16,10 +15,22 @@ on:
         description: 'Action delay in seconds (default 0.6)'
         required: false
         default: '0.6'
-
-  # Allow scheduling via cron (commented out by default — uncomment to enable)
-  # schedule:
-  #   - cron: '0 8 * * *'  # Daily at 08:00 UTC
+      pimc:
+        description: 'Enable PIMC for discard decisions (1=on, 0=off)'
+        required: false
+        default: '1'
+      ismcts:
+        description: 'Enable IS-MCTS for eat decisions (1=on, 0=off)'
+        required: false
+        default: '1'
+      pimc_rollouts:
+        description: 'PIMC rollouts per candidate (default 100)'
+        required: false
+        default: '100'
+      ismcts_rollouts:
+        description: 'IS-MCTS rollouts per branch (default 50)'
+        required: false
+        default: '50'
 
 jobs:
   play:
@@ -32,6 +43,10 @@ jobs:
       PHOM_BET_XU: ${{ github.event.inputs.bet || '10' }}
       PHOM_MAX_GAMES: ${{ github.event.inputs.games || '10' }}
       PHOM_ACTION_DELAY: ${{ github.event.inputs.delay || '0.6' }}
+      PHOM_PIMC: ${{ github.event.inputs.pimc || '1' }}
+      PHOM_ISMCTS: ${{ github.event.inputs.ismcts || '1' }}
+      PHOM_PIMC_ROLLOUTS: ${{ github.event.inputs.pimc_rollouts || '100' }}
+      PHOM_ISMCTS_ROLLOUTS: ${{ github.event.inputs.ismcts_rollouts || '50' }}
 
     steps:
       - name: Checkout code
@@ -55,10 +70,22 @@ jobs:
           fi
           echo "Secrets OK — running as user: ${GAMEVH_USER:0:2}***"
 
+      - name: Show config
+        run: |
+          echo "=== Phỏm Bot Config ==="
+          echo "Games: $PHOM_MAX_GAMES | Bet: $PHOM_BET_XU xu | Delay: ${PHOM_ACTION_DELAY}s"
+          echo "PIMC: $PHOM_PIMC (rollouts=$PHOM_PIMC_ROLLOUTS)"
+          echo "IS-MCTS: $PHOM_ISMCTS (rollouts=$PHOM_ISMCTS_ROLLOUTS)"
+          echo ""
+          echo "Current weights.json:"
+          if [ -f weights.json ]; then
+            cat weights.json | head -25
+          else
+            echo "  (no weights.json — bot will use built-in defaults)"
+          fi
+
       - name: Run Phỏm bot
         run: |
-          echo "=== Starting Phỏm bot ==="
-          echo "Games: $PHOM_MAX_GAMES | Bet: $PHOM_BET_XU xu | Delay: ${PHOM_ACTION_DELAY}s"
           python phom_bot.py 2>&1 | tee bot_output.log
 
       - name: Show game summary
@@ -67,16 +94,27 @@ jobs:
           echo "=== Game Summary ==="
           grep -E "^\[GAME\] (START|OVER)" bot_output.log || echo "No games completed"
           echo ""
-          echo "=== AI Decision Sample ==="
-          grep -E "^\[AI\]" bot_output.log | head -20 || echo "No AI decisions logged"
+          echo "=== PIMC Decision Sample ==="
+          grep -E "^\[PIMC\]" bot_output.log | head -10 || echo "No PIMC decisions logged"
+          echo ""
+          echo "=== IS-MCTS Decision Sample ==="
+          grep -E "^\[IS-MCTS\]" bot_output.log | head -10 || echo "No IS-MCTS decisions logged"
+          echo ""
+          echo "=== AI Heuristic Decision Sample ==="
+          grep -E "^\[AI\]" bot_output.log | head -10 || echo "No AI decisions logged"
+          echo ""
+          echo "=== Stats ==="
+          echo "PIMC calls:    $(grep -c '^\[PIMC\]' bot_output.log || echo 0)"
+          echo "IS-MCTS calls: $(grep -c '^\[IS-MCTS\]' bot_output.log || echo 0)"
+          echo "AI fallback:   $(grep -c '^\[AI\]' bot_output.log || echo 0)"
           echo ""
           echo "=== Win/Loss Tally ==="
           total=$(grep -c "^\[GAME\] OVER" bot_output.log || echo 0)
-          wins=$(grep "^\[GAME\] OVER" bot_output.log | grep "grade': 1" | grep "slot': 0" | wc -l || echo 0)
+          wins=$(grep "^\[GAME\] OVER" bot_output.log | grep "slot': 0, 'grade': 1" | wc -l || echo 0)
           echo "Total games: $total"
-          echo "Bot wins:    $wins"
+          echo "Bot wins (slot 0, grade 1): $wins"
           if [ "$total" -gt 0 ]; then
-            echo "Win rate:    $(echo "scale=1; $wins * 100 / $total" | bc)%"
+            echo "Win rate: $(echo "scale=1; $wins * 100 / $total" | bc)%"
           fi
 
       - name: Upload bot log as artifact
