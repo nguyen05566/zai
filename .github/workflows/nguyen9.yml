@@ -1,0 +1,101 @@
+name: nguyen9
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Run duration (minutes, max 360)'
+        required: false
+        default: '360'
+  schedule:
+    # Chạy mỗi giờ (bot sẽ tự chơi đến khi timeout)
+    - cron: '0 * * * *'
+
+# =========================================================================
+# Cấu hình Concurrency chống chạy chồng lấn
+# - group: Gom tất cả các lượt run của workflow này (hoặc cùng branch) vào 1 nhóm.
+# - cancel-in-progress: true -> Khi có lượt run mới, lượt run cũ đang chạy sẽ bị HỦY NGAY.
+# (Nếu bạn muốn lượt run mới phải XẾP HÀNG CHỜ lượt run cũ kết thúc thì đổi thành `cancel-in-progress: false`)
+# =========================================================================
+concurrency:
+  group: bot-execution-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install websocket-client requests
+          # 7-zip để giải nén archive Pikafish (release chính thức dùng .7z)
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full
+
+      - name: Download & extract mainline Pikafish binary
+        run: |
+          echo "=== Downloading mainline Pikafish (mistboard level 8 engine) ==="
+          # Mainline Pikafish release — tag format: Pikafish-YYYY-MM-DD
+          # mistboard's pikafish-xiangqi-level-8 tier drives this binary via UCI:
+          #   nodes=3_000_000, movetimeMs=4_000, EvalFile=pikafish.nnue
+          # Use Pikafish-2026-01-02 (same version mistboard references in
+          # xiangqi-pikafish-engine.ts pikafishXiangqiPath() dev fallback).
+          # Archive is .7z (NOT tar.gz), contains Linux binaries for many CPU
+          # architectures + pikafish.nnue at the root.
+          curl -fsL -o pikafish.7z \
+            https://github.com/official-pikafish/Pikafish/releases/download/Pikafish-2026-01-02/Pikafish.2026-01-02.7z
+          ls -la pikafish.7z
+          # Extract full archive into ./pikafish-extract
+          7z x pikafish.7z -opikafish-extract -y > /dev/null
+          # Show what binaries are available
+          echo "=== Linux binaries available ==="
+          ls -la pikafish-extract/Linux/
+          # Pick pikafish-avx2 (GitHub Actions ubuntu-latest runners support AVX2)
+          cp pikafish-extract/Linux/pikafish-avx2 ./pikafish
+          chmod +x ./pikafish
+          # NNUE is at the archive root
+          cp pikafish-extract/pikafish.nnue ./pikafish.nnue
+          ls -la ./pikafish ./pikafish.nnue
+          echo "=== Smoke test ==="
+          printf 'uci\nquit\n' | ./pikafish | head -5
+
+      - name: Verify files
+        run: |
+          echo "=== Files in workspace ==="
+          ls -la nguyen9.py pikafish pikafish.nnue
+          echo "=== Python syntax check ==="
+          python3 -m py_compile nguyen9.py && echo "OK"
+
+      - name: Run bot (nguyen9.py — cờ tướng, mainline Pikafish level 8)
+        env:
+          ZARO3_USER: ${{ secrets.ZARO3_USER }}
+          ZARO3_PASSWD: ${{ secrets.ZARO3_PASSWD }}
+          # Engine path overrides (mistboard convention)
+          MISTBOARD_PIKAFISH_XIANGQI_PATH: ${{ github.workspace }}/pikafish
+          MISTBOARD_PIKAFISH_XIANGQI_NET: ${{ github.workspace }}/pikafish.nnue
+        run: |
+          echo "=== Starting bot at $(date) ==="
+          echo "=== Bot: nguyen9.py (cờ tướng — xiangqi) ==="
+          echo "=== Engine: mainline Pikafish (mistboard pikafish-xiangqi-level-8) ==="
+          echo "=== Logic: chỉ tạo bàn 5000 xu (CREATE_RULE), KHÔNG dò/find bàn ==="
+          echo "=== Logic 'chuyển xu' (transfer_xu_sync) đã bị bỏ ==="
+          python3 -u nguyen9.py 2>&1 | grep -v "WS-CAPTURE\|hidden piece"
+          echo "=== Bot stopped at $(date) ==="
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-logs-${{ github.run_id }}
+          path: |
+            ws_capture/
+          retention-days: 7
