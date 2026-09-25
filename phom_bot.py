@@ -230,6 +230,69 @@ def choose_send_card(hand: list[int], exposed_lines: list[list[int]]) -> int | N
 # Section C — AI engine (replaces the old deadwood-only choose_discard)
 # ===========================================================================
 
+# Default weights — used when weights.json is not present or fails to load.
+# These are the 2P-tuned weights that achieved 9/10 win rate on live server.
+_DEFAULT_WEIGHTS = {
+    "early": {
+        "deadwood": 1.9927, "own_neighbour": 1.0324, "safety": 0.4629,
+        "danger": 1.0211, "melds_after": 0.8178,
+    },
+    "middle": {
+        "deadwood": 0.4185, "own_neighbour": 0.5036, "safety": 1.3825,
+        "danger": 1.2678, "melds_after": 1.6607,
+    },
+    "final": {
+        "deadwood": 0.1819, "own_neighbour": 0.434, "safety": 1.5181,
+        "danger": 4.6453, "melds_after": 4.4736,
+    },
+}
+
+# Search path for weights.json — co-located with this script first, then CWD.
+_WEIGHTS_PATHS = [
+    Path(__file__).resolve().parent / "weights.json",
+    Path.cwd() / "weights.json",
+]
+_LOAD_WEIGHTS_CACHE: dict | None = None
+_LOAD_WEIGHTS_MTIME: float | None = None
+
+
+def _LOAD_WEIGHTS() -> dict:
+    """Load weights.json (auto-tuned by self-play workflow) with caching.
+    Reloads automatically if the file mtime changes — useful for hot-reload
+    after a tuning run commits new weights.
+    """
+    global _LOAD_WEIGHTS_CACHE, _LOAD_WEIGHTS_MTIME
+    for path in _WEIGHTS_PATHS:
+        if not path.exists():
+            continue
+        try:
+            mtime = path.stat().st_mtime
+            if _LOAD_WEIGHTS_CACHE is not None and mtime == _LOAD_WEIGHTS_MTIME:
+                return _LOAD_WEIGHTS_CACHE
+            with path.open() as f:
+                data = json.load(f)
+            # Accept either {"weights": {...}} (tuner output) or {...} directly
+            w = data.get("weights", data) if isinstance(data, dict) else None
+            if not isinstance(w, dict):
+                continue
+            # Validate structure
+            ok = all(
+                phase in w and isinstance(w[phase], dict)
+                and all(k in w[phase] for k in
+                        ("deadwood", "own_neighbour", "safety",
+                         "danger", "melds_after"))
+                for phase in ("early", "middle", "final")
+            )
+            if not ok:
+                continue
+            _LOAD_WEIGHTS_CACHE = w
+            _LOAD_WEIGHTS_MTIME = mtime
+            return w
+        except (json.JSONDecodeError, OSError):
+            continue
+    return _DEFAULT_WEIGHTS
+
+
 def _seen_cards(public_state: dict, my_hand: list[int]) -> set[int]:
     """Every card whose location is publicly known."""
     seen: set[int] = set()
@@ -398,41 +461,29 @@ def choose_discard_ai(
 
     seen = _seen_cards(public_state, concrete)
 
-    # Phase weights — tuned via 10,000-game self-play (random search).
-    # See /home/z/my-project/scripts/random_search_weights.json
-    # Key shifts vs original v2:
-    #   * early.deadwood 1.0 -> 1.99  (shed high deadwood more aggressively)
-    #   * final.danger   2.5 -> 4.65  (heavily avoid feeding chốt)
-    #   * final.melds_after 2.5 -> 4.47  (protect melds in final round)
-    # Validation: 9/10 win rate on live server (best result so far).
+    # Phase weights — load from weights.json if available (auto-tuned by
+    # self-play workflow), otherwise fall back to 2P-tuned defaults below.
+    weights = _LOAD_WEIGHTS()
+
     if round_idx <= 1 and not is_final_round:
-        # Rounds 1-2: aggressive deadwood shed, modest meld protection.
-        w_deadwood = 1.9927
-        w_own_neighbour = 1.0324
-        w_safety = 0.4629
-        w_danger = 1.0211
-        w_melds_after = 0.8178
+        phase = "early"
         mom_guard_soft = True
         mom_guard_hard = False
     elif round_idx == 2 and not is_final_round:
-        # Round 3: tilt toward defence, never drop to zero melds.
-        w_deadwood = 0.4185
-        w_own_neighbour = 0.5036
-        w_safety = 1.3825
-        w_danger = 1.2678
-        w_melds_after = 1.6607
+        phase = "middle"
         mom_guard_soft = True
         mom_guard_hard = True
     else:
-        # Round 4 (finalRemove) or any late state: pure defence, but accept
-        # móm in finalRemove (no choice by then).
-        w_deadwood = 0.1819
-        w_own_neighbour = 0.434
-        w_safety = 1.5181
-        w_danger = 4.6453
-        w_melds_after = 4.4736
+        phase = "final"
         mom_guard_soft = True
         mom_guard_hard = not is_final_round  # final round: allow móm
+
+    w = weights[phase]
+    w_deadwood = w["deadwood"]
+    w_own_neighbour = w["own_neighbour"]
+    w_safety = w["safety"]
+    w_danger = w["danger"]
+    w_melds_after = w["melds_after"]
 
     candidates: list[tuple] = []
     # First pass: collect all candidates. We'll apply the soft móm guard as

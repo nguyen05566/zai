@@ -1,0 +1,123 @@
+name: Phỏm Self-Play Tune
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: 'Tuning duration in minutes (max 325 = 5h25m)'
+        required: false
+        default: '325'
+      games_per_eval:
+        description: 'Games per candidate eval (default 300)'
+        required: false
+        default: '300'
+      n_candidates:
+        description: 'Candidates per round (default 8)'
+        required: false
+        default: '8'
+
+  # Uncomment to schedule daily runs
+  # schedule:
+  #   - cron: '0 1 * * *'  # Daily at 01:00 UTC
+
+jobs:
+  tune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330  # 5.5h hard cap — GitHub will kill at this point
+    env:
+      SELFPLAY_MAX_SECONDS: ${{ github.event.inputs.duration_minutes && (github.event.inputs.duration_minutes * 60) || '19500' }}
+      SELFPLAY_GAMES_PER_EVAL: ${{ github.event.inputs.games_per_eval || '300' }}
+      SELFPLAY_N_CANDS: ${{ github.event.inputs.n_candidates || '8' }}
+      SELFPLAY_WEIGHTS_PATH: weights.json
+      SELFPLAY_PROGRESS_PATH: selfplay_progress.json
+      GIT_AUTHOR_NAME: github-actions
+      GIT_AUTHOR_EMAIL: actions@github.com
+      GIT_COMMITTER_NAME: github-actions
+      GIT_COMMITTER_EMAIL: actions@github.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Fetch full history so we can push back
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install websocket-client
+
+      - name: Copy tuner script
+        run: |
+          mkdir -p scripts
+          cp .github/scripts/selfplay_tune_continuous.py scripts/ 2>/dev/null || true
+          ls scripts/
+
+      - name: Show config
+        run: |
+          echo "=== Self-Play Tuning Job ==="
+          echo "Duration: ${{ env.SELFPLAY_MAX_SECONDS }}s ($((${{ env.SELFPLAY_MAX_SECONDS }} / 60)) min)"
+          echo "Games per eval: ${{ env.SELFPLAY_GAMES_PER_EVAL }}"
+          echo "Candidates per round: ${{ env.SELFPLAY_N_CANDS }}"
+          echo "Workers: $(nproc)"
+          echo ""
+          echo "Current weights (if any):"
+          if [ -f weights.json ]; then
+            cat weights.json | head -30
+          else
+            echo "  (no existing weights.json — will start from DEFAULT)"
+          fi
+
+      - name: Run continuous tuner
+        run: |
+          python scripts/selfplay_tune_continuous.py 2>&1 | tee tune_output.log
+
+      - name: Show tuning summary
+        if: always()
+        run: |
+          echo "=== Tuning Summary ==="
+          tail -50 tune_output.log || echo "No output captured"
+          echo ""
+          echo "=== Final weights.json ==="
+          if [ -f weights.json ]; then
+            cat weights.json
+          else
+            echo "  (no weights.json produced)"
+          fi
+
+      - name: Commit and push weights.json
+        if: always() && hashFiles('weights.json') != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Pull any changes from concurrent runs
+          git pull --rebase origin ${{ github.ref_name }} || true
+          # Add weights + progress files
+          git add weights.json selfplay_progress.json tune_output.log 2>/dev/null || true
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-tune weights: $(date -u '+%Y-%m-%d %H:%M') UTC
+
+            $(tail -10 tune_output.log)"
+            git push
+            echo "Pushed weights.json to repo"
+          fi
+
+      - name: Upload tuning log as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selfplay-tune-log-${{ github.run_id }}
+          path: |
+            tune_output.log
+            weights.json
+            selfplay_progress.json
+          retention-days: 30
