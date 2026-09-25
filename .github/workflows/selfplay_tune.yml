@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330  # 5.5h hard cap — GitHub will kill at this point
     env:
-      SELFPLAY_MAX_SECONDS: ${{ github.event.inputs.duration_minutes && (github.event.inputs.duration_minutes * 60) || '19500' }}
+      DURATION_MIN: ${{ github.event.inputs.duration_minutes || '325' }}
       SELFPLAY_GAMES_PER_EVAL: ${{ github.event.inputs.games_per_eval || '300' }}
       SELFPLAY_N_CANDS: ${{ github.event.inputs.n_candidates || '8' }}
       SELFPLAY_WEIGHTS_PATH: weights.json
@@ -61,11 +61,14 @@ jobs:
 
       - name: Show config
         run: |
-          echo "=== Self-Play Tuning Job ==="
-          echo "Duration: ${{ env.SELFPLAY_MAX_SECONDS }}s ($((${{ env.SELFPLAY_MAX_SECONDS }} / 60)) min)"
-          echo "Games per eval: ${{ env.SELFPLAY_GAMES_PER_EVAL }}"
-          echo "Candidates per round: ${{ env.SELFPLAY_N_CANDS }}"
+          DURATION_SEC=$((DURATION_MIN * 60))
+          export SELFPLAY_MAX_SECONDS=$DURATION_SEC
+          echo "DURATION_MIN=$DURATION_MIN"
+          echo "SELFPLAY_MAX_SECONDS=$DURATION_SEC"
+          echo "SELFPLAY_GAMES_PER_EVAL=$SELFPLAY_GAMES_PER_EVAL"
+          echo "SELFPLAY_N_CANDS=$SELFPLAY_N_CANDS"
           echo "Workers: $(nproc)"
+          echo "SELFPLAY_MAX_SECONDS=$DURATION_SEC" >> $GITHUB_ENV
           echo ""
           echo "Current weights (if any):"
           if [ -f weights.json ]; then
@@ -75,6 +78,8 @@ jobs:
           fi
 
       - name: Run continuous tuner
+        env:
+          SELFPLAY_MAX_SECONDS: ${{ env.SELFPLAY_MAX_SECONDS }}
         run: |
           python scripts/selfplay_tune_continuous.py 2>&1 | tee tune_output.log
 
