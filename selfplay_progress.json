@@ -1,0 +1,32 @@
+{
+  "round": 1,
+  "elapsed_sec": 5.940871477127075,
+  "total_games": 1000,
+  "current_top2": 0.54,
+  "current_win_rate": 0.26,
+  "stale_rounds": 1,
+  "games_per_sec": 168.3254727610412,
+  "current_weights": {
+    "early": {
+      "deadwood": 1.0,
+      "own_neighbour": 0.7,
+      "safety": 0.4,
+      "danger": 0.8,
+      "melds_after": 1.2
+    },
+    "middle": {
+      "deadwood": 0.5,
+      "own_neighbour": 0.5,
+      "safety": 1.0,
+      "danger": 1.5,
+      "melds_after": 2.0
+    },
+    "final": {
+      "deadwood": 0.3,
+      "own_neighbour": 0.3,
+      "safety": 1.8,
+      "danger": 2.5,
+      "melds_after": 2.5
+    }
+  }
+}
