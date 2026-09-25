@@ -35,8 +35,17 @@ from pathlib import Path
 # Add the script directory to path so we can import phom_sim
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-# Also add the bot directory for the rule engine
-sys.path.insert(0, "/home/z/my-project/download")
+# Also add sibling directories where phom_sim.py / phom_bot.py might live
+for candidate in [
+    SCRIPT_DIR,  # scripts/ (local dev)
+    SCRIPT_DIR.parent / "download",  # download/ (bot location)
+    SCRIPT_DIR.parent / ".github" / "scripts",  # .github/scripts/ (CI)
+    Path.cwd(),  # current working dir
+    Path.cwd() / "scripts",
+    Path.cwd() / ".github" / "scripts",
+]:
+    if candidate.exists():
+        sys.path.insert(0, str(candidate))
 
 from phom_sim import (
     DEFAULT_WEIGHTS, evaluate_weights_4p_worker,

@@ -19,8 +19,22 @@ import sys
 from functools import lru_cache
 from itertools import combinations
 
-# Import the rule engine from phom_bot.py
-sys.path.insert(0, "/home/z/my-project/download")
+# Import the rule engine from phom_bot.py — search multiple candidate paths
+# so the simulator works both in local dev and in CI runners.
+import os
+from pathlib import Path
+_SEARCH_PATHS = [
+    Path(__file__).resolve().parent,                  # scripts/
+    Path(__file__).resolve().parent.parent / "download",  # ../download/
+    Path(__file__).resolve().parent.parent / ".github" / "scripts",
+    Path.cwd(),
+    Path.cwd() / "scripts",
+    Path.cwd() / ".github" / "scripts",
+    Path("/home/z/my-project/download"),  # local dev fallback
+]
+for _p in _SEARCH_PATHS:
+    if _p.exists():
+        sys.path.insert(0, str(_p))
 from phom_bot import (
     valid_card, rank, suit, point, card_name,
     meld_masks, best_meld_partition, best_deadwood,
