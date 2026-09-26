@@ -678,16 +678,37 @@ class MistboardJieqiEngine:
             self._kill()
             return
         nnue_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikafish.nnue")
+        # Load tuned params from jieqi_best_params.json (auto-tuned by
+        # .github/workflows/jieqi_tune.yml). Falls back to defaults if missing.
+        params_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jieqi_best_params.json")
+        tuned = {}
+        if os.path.isfile(params_path):
+            try:
+                import json as _json
+                with open(params_path) as _f:
+                    _data = _json.load(_f)
+                tuned = _data.get("params", {}) or {}
+                print(f"[ENGINE] 🎛️ Loaded tuned params from jieqi_best_params.json: {tuned}")
+            except Exception as _e:
+                print(f"[ENGINE] ⚠️ Failed to load jieqi_best_params.json: {_e}")
+        else:
+            print("[ENGINE] ℹ️ No jieqi_best_params.json — using hardcoded defaults")
         with self.engine_lock:
             try:
-                _threads = max(1, min(2, (os.cpu_count() or 2) - 1))
+                _threads = tuned.get("Threads") or str(max(1, min(2, (os.cpu_count() or 2) - 1)))
+                _hash = tuned.get("Hash") or "128"
+                _multipv = tuned.get("MultiPV") or "1"
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
-                self.proc.stdin.write("setoption name Hash value 128\n")
+                self.proc.stdin.write(f"setoption name Hash value {_hash}\n")
                 # Mistboard's pinned classical jieqi_old build does not require
                 # an NNUE file. Use it only when the optional net is present.
                 if os.path.isfile(nnue_path):
                     self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
-                self.proc.stdin.write("setoption name MultiPV value 1\n")
+                self.proc.stdin.write(f"setoption name MultiPV value {_multipv}\n")
+                # Apply other tuned params if present
+                for _p in ("Move Overhead", "Slow Mover", "Skill Level"):
+                    if _p in tuned:
+                        self.proc.stdin.write(f"setoption name {_p} value {tuned[_p]}\n")
                 self.proc.stdin.write("isready\n")
                 self.proc.stdin.flush()
             except Exception as e:
