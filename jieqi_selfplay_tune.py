@@ -27,13 +27,13 @@ from jieqi_sim import (
 # Config
 # ============================================================================
 
-TOTAL_GAME_BUDGET = int(os.environ.get("JIEQI_TOTAL_GAMES", "200"))
-GAMES_PER_EVAL = int(os.environ.get("JIEQI_GAMES_PER_EVAL", "20"))
+TOTAL_GAME_BUDGET = int(os.environ.get("JIEQI_TOTAL_GAMES", "999999"))
+GAMES_PER_EVAL = int(os.environ.get("JIEQI_GAMES_PER_EVAL", "30"))
 N_WORKERS = min(2, max(1, cpu_count()))
 MOVETIME_MS = int(os.environ.get("JIEQI_MOVETIME_MS",
                                   str(DEFAULT_MOVETIME_MS)))
-THRESHOLD = 0.10  # 10% improvement required (high due to noise)
-MAX_ITERS = 10
+THRESHOLD = float(os.environ.get("JIEQI_THRESHOLD", "0.05"))  # 5% (lowered from 10%)
+MAX_ITERS = 50  # increased — let it run as long as time allows
 
 # Tunable params — list of (param_name, [factor_low, factor_high])
 # Note: most UCI params are integers, so we perturb by ±1 step.
@@ -125,6 +125,8 @@ def main():
     total_games = 0
     start = time.time()
     eval_id = 0
+    max_runtime_sec = int(os.environ.get("JIEQI_MAX_SECONDS", "0"))  # 0 = unlimited
+    deadline = (start + max_runtime_sec) if max_runtime_sec > 0 else None
 
     # Quick baseline measurement (cand vs cand = should be ~50%)
     print(f"[BOOT] Measuring baseline ({GAMES_PER_EVAL} games)...", flush=True)
@@ -140,6 +142,10 @@ def main():
     for it in range(MAX_ITERS):
         if total_games >= TOTAL_GAME_BUDGET:
             print(f"[STOP] Budget exhausted ({total_games} games)", flush=True)
+            break
+        if deadline and time.time() >= deadline:
+            print(f"[STOP] Time limit reached ({time.time()-start:.0f}s elapsed)",
+                  flush=True)
             break
 
         print(f"=== Iteration {it+1} ===", flush=True)
@@ -200,6 +206,10 @@ def main():
                         source="self-play-improved")
         else:
             print(f"[REJECT] no significant improvement\n", flush=True)
+
+        # Always save checkpoint after each iteration (in case timeout kills process)
+        save_params(current_best, baseline_wr, total_games, it+1,
+                    source=f"self-play-checkpoint-iter{it+1}")
 
     elapsed = time.time() - start
     print(f"\n=== DONE ===", flush=True)

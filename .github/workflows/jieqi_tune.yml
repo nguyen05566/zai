@@ -8,9 +8,9 @@ on:
         required: false
         default: '60'
       games_per_eval:
-        description: 'Games per candidate eval (default 20)'
+        description: 'Games per candidate eval (default 30)'
         required: false
-        default: '20'
+        default: '30'
       movetime_ms:
         description: 'Engine movetime per move in ms (default 300)'
         required: false
@@ -60,15 +60,19 @@ jobs:
           echo "Duration: $DURATION_MIN min ($DURATION_SEC sec)"
           echo "Games per eval: $JIEQI_GAMES_PER_EVAL"
           echo "Movetime: $JIEQI_MOVETIME_MS ms/move"
+          echo "Threshold: 5%"
           echo "Workers: $(nproc)"
           echo "DURATION_SEC=$DURATION_SEC" >> $GITHUB_ENV
 
       - name: Run tuner with timeout
         env:
           JIEQI_TOTAL_GAMES: '999999'
+          JIEQI_MAX_SECONDS: ${{ env.DURATION_SEC }}
+          JIEQI_THRESHOLD: '0.05'
         run: |
-          # Use timeout to enforce duration
-          timeout ${{ env.DURATION_SEC }} python jieqi_selfplay_tune.py 2>&1 | tee tune_output.log || true
+          # Use timeout as safety net (slightly longer than DURATION_SEC)
+          SAFETY_SEC=$((DURATION_SEC + 30))
+          timeout $SAFETY_SEC python jieqi_selfplay_tune.py 2>&1 | tee tune_output.log || true
           echo "=== Tuner finished or timed out ==="
 
       - name: Show tuning summary
