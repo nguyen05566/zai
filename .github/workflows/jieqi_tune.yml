@@ -1,0 +1,112 @@
+name: Jieqi Self-Play Tune
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: 'Tuning duration in minutes (max 325 = 5h25m)'
+        required: false
+        default: '60'
+      games_per_eval:
+        description: 'Games per candidate eval (default 20)'
+        required: false
+        default: '20'
+      movetime_ms:
+        description: 'Engine movetime per move in ms (default 300)'
+        required: false
+        default: '300'
+
+jobs:
+  tune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    permissions:
+      contents: write
+    env:
+      JIEQI_TOTAL_GAMES: '999999'  # no budget cap, use time instead
+      JIEQI_GAMES_PER_EVAL: ${{ github.event.inputs.games_per_eval || '20' }}
+      JIEQI_MOVETIME_MS: ${{ github.event.inputs.movetime_ms || '300' }}
+      JIEQI_PARAMS_PATH: jieqi_best_params.json
+      MISTBOARD_JIEQI_ENGINE: ${{ github.workspace }}/pikajieqi-native
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # No external deps needed — pure stdlib
+
+      - name: Make engine executable
+        run: |
+          chmod +x pikajieqi-native
+          ls -la pikajieqi-native
+          # Quick smoke test
+          echo "uci" | ./pikajieqi-native | head -5
+
+      - name: Show config
+        run: |
+          DURATION_MIN=${{ github.event.inputs.duration_minutes || '60' }}
+          DURATION_SEC=$((DURATION_MIN * 60))
+          echo "Duration: $DURATION_MIN min ($DURATION_SEC sec)"
+          echo "Games per eval: $JIEQI_GAMES_PER_EVAL"
+          echo "Movetime: $JIEQI_MOVETIME_MS ms/move"
+          echo "Workers: $(nproc)"
+          echo "DURATION_SEC=$DURATION_SEC" >> $GITHUB_ENV
+
+      - name: Run tuner with timeout
+        env:
+          JIEQI_TOTAL_GAMES: '999999'
+        run: |
+          # Use timeout to enforce duration
+          timeout ${{ env.DURATION_SEC }} python jieqi_selfplay_tune.py 2>&1 | tee tune_output.log || true
+          echo "=== Tuner finished or timed out ==="
+
+      - name: Show tuning summary
+        if: always()
+        run: |
+          echo "=== Tuning Summary ==="
+          tail -30 tune_output.log || echo "No output"
+          echo ""
+          echo "=== Final jieqi_best_params.json ==="
+          if [ -f jieqi_best_params.json ]; then
+            cat jieqi_best_params.json
+          else
+            echo "  (no params file produced)"
+          fi
+
+      - name: Commit and push params
+        if: always() && hashFiles('jieqi_best_params.json') != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin ${{ github.ref_name }} || true
+          git add jieqi_best_params.json tune_output.log 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-tune Jieqi params: $(date -u '+%Y-%m-%d %H:%M') UTC
+
+            $(tail -10 tune_output.log)"
+            git push
+            echo "Pushed jieqi_best_params.json to repo"
+          fi
+
+      - name: Upload tuning log as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jieqi-tune-log-${{ github.run_id }}
+          path: |
+            tune_output.log
+            jieqi_best_params.json
+          retention-days: 30
