@@ -1,600 +1,540 @@
-=== Continuous Self-Play Tuner ===
-Max runtime: 300s (5.0 min)
-Workers: 4
-Games per eval: 100
-Games per validate: 500
-Candidates per round: 4
-Threshold: 1.0% top2_rate improvement
-Weights path: weights.json
-Progress path: selfplay_progress.json
-Baseline (DEFAULT) weights:
-{
-  "early": {
-    "deadwood": 1.0,
-    "own_neighbour": 0.7,
-    "safety": 0.4,
-    "danger": 0.8,
-    "melds_after": 1.2
-  },
-  "middle": {
-    "deadwood": 0.5,
-    "own_neighbour": 0.5,
-    "safety": 1.0,
-    "danger": 1.5,
-    "melds_after": 2.0
-  },
-  "final": {
-    "deadwood": 0.3,
-    "own_neighbour": 0.3,
-    "safety": 1.8,
-    "danger": 2.5,
-    "melds_after": 2.5
-  }
-}
-
-[LOAD] Using DEFAULT_WEIGHTS
-[BOOT] Measuring baseline (100 games)...
-[BOOT] baseline: wr=0.260 top2=0.540 dw=26.4
-
-
-=== Round 1 === (elapsed 0.0 min, left 5.0 min)
-  cand wr=0.270 top2=0.550 dw=29.4
-  cand wr=0.230 top2=0.420 dw=29.7
-  cand wr=0.240 top2=0.500 dw=28.6
-  cand wr=0.250 top2=0.540 dw=29.4
-[Round 1] best top2=0.550 wr=0.270 Δtop2=+0.010 (1.4s, 500 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.488 Δ=-0.052
-  [REJECT] validation failed
-  [CHECKPOINT] saved (elapsed 0.1 min, 168 games/s, top2=0.540)
-
-=== Round 2 === (elapsed 0.1 min, left 4.9 min)
-  cand wr=0.310 top2=0.550 dw=28.2
-  cand wr=0.290 top2=0.480 dw=28.5
-  cand wr=0.260 top2=0.500 dw=29.4
-  cand wr=0.250 top2=0.470 dw=29.5
-[Round 2] best top2=0.550 wr=0.310 Δtop2=+0.010 (1.3s, 1400 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.492 Δ=-0.048
-  [REJECT] validation failed
-
-=== Round 3 === (elapsed 0.2 min, left 4.8 min)
-  cand wr=0.230 top2=0.480 dw=30.6
-  cand wr=0.240 top2=0.490 dw=28.1
-  cand wr=0.240 top2=0.470 dw=30.5
-  cand wr=0.320 top2=0.530 dw=28.2
-[Round 3] best top2=0.530 wr=0.320 Δtop2=-0.010 (1.3s, 2300 games total)
-
-=== Round 4 === (elapsed 0.2 min, left 4.8 min)
-  cand wr=0.220 top2=0.470 dw=30.6
-  cand wr=0.270 top2=0.510 dw=30.4
-  cand wr=0.280 top2=0.550 dw=28.5
-  cand wr=0.270 top2=0.520 dw=26.8
-[Round 4] best top2=0.550 wr=0.280 Δtop2=+0.010 (1.3s, 2700 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.454 Δ=-0.086
-  [REJECT] validation failed
-
-=== Round 5 === (elapsed 0.3 min, left 4.7 min)
-  cand wr=0.250 top2=0.500 dw=30.6
-  cand wr=0.280 top2=0.530 dw=28.9
-  cand wr=0.280 top2=0.570 dw=26.8
-  cand wr=0.250 top2=0.510 dw=30.1
-[Round 5] best top2=0.570 wr=0.280 Δtop2=+0.030 (1.3s, 3600 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.516 Δ=-0.024
-  [REJECT] validation failed
-
-=== Round 6 === (elapsed 0.4 min, left 4.6 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.310 top2=0.600 dw=26.2
-  cand wr=0.250 top2=0.460 dw=29.0
-  cand wr=0.270 top2=0.560 dw=28.7
-  cand wr=0.260 top2=0.540 dw=28.4
-[Round 6] best top2=0.600 wr=0.310 Δtop2=+0.060 (1.3s, 4500 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.466 Δ=-0.074
-  [REJECT] validation failed
-
-=== Round 7 === (elapsed 0.5 min, left 4.5 min)
-  cand wr=0.230 top2=0.420 dw=30.7
-  cand wr=0.250 top2=0.450 dw=30.6
-  cand wr=0.210 top2=0.460 dw=30.4
-  cand wr=0.180 top2=0.470 dw=30.7
-[Round 7] best top2=0.470 wr=0.180 Δtop2=-0.070 (1.3s, 5400 games total)
-
-=== Round 8 === (elapsed 0.5 min, left 4.5 min)
-  cand wr=0.210 top2=0.470 dw=29.9
-  cand wr=0.220 top2=0.490 dw=29.2
-  cand wr=0.350 top2=0.580 dw=27.2
-  cand wr=0.250 top2=0.440 dw=30.1
-[Round 8] best top2=0.580 wr=0.350 Δtop2=+0.040 (1.3s, 5800 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.494 Δ=-0.046
-  [REJECT] validation failed
-
-=== Round 9 === (elapsed 0.6 min, left 4.4 min)
-  cand wr=0.290 top2=0.510 dw=28.3
-  cand wr=0.280 top2=0.520 dw=29.3
-  cand wr=0.280 top2=0.560 dw=28.9
-  cand wr=0.200 top2=0.520 dw=30.2
-[Round 9] best top2=0.560 wr=0.280 Δtop2=+0.020 (1.3s, 6700 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.480 Δ=-0.060
-  [REJECT] validation failed
-
-=== Round 10 === (elapsed 0.7 min, left 4.3 min)
-  cand wr=0.190 top2=0.460 dw=29.5
-  cand wr=0.260 top2=0.470 dw=30.0
-  cand wr=0.210 top2=0.480 dw=28.1
-  cand wr=0.260 top2=0.440 dw=29.2
-[Round 10] best top2=0.480 wr=0.210 Δtop2=-0.060 (1.3s, 7600 games total)
-
-=== Round 11 === (elapsed 0.7 min, left 4.3 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.220 top2=0.470 dw=29.6
-  cand wr=0.290 top2=0.490 dw=28.4
-  cand wr=0.300 top2=0.580 dw=28.2
-  cand wr=0.230 top2=0.500 dw=28.6
-[Round 11] best top2=0.580 wr=0.300 Δtop2=+0.040 (1.3s, 8000 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.474 Δ=-0.066
-  [REJECT] validation failed
-
-=== Round 12 === (elapsed 0.8 min, left 4.2 min)
-  cand wr=0.300 top2=0.560 dw=28.7
-  cand wr=0.250 top2=0.520 dw=28.2
-  cand wr=0.280 top2=0.500 dw=28.2
-  cand wr=0.190 top2=0.400 dw=30.2
-[Round 12] best top2=0.560 wr=0.300 Δtop2=+0.020 (1.3s, 8900 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.544 Δ=+0.004
-  [REJECT] validation failed
-
-=== Round 13 === (elapsed 0.8 min, left 4.2 min)
-  cand wr=0.260 top2=0.540 dw=29.3
-  cand wr=0.150 top2=0.370 dw=35.1
-  cand wr=0.160 top2=0.380 dw=33.6
-  cand wr=0.210 top2=0.530 dw=27.8
-[Round 13] best top2=0.540 wr=0.260 Δtop2=+0.000 (1.3s, 9800 games total)
-
-=== Round 14 === (elapsed 0.9 min, left 4.1 min)
-  cand wr=0.210 top2=0.510 dw=29.2
-  cand wr=0.230 top2=0.490 dw=30.0
-  cand wr=0.230 top2=0.490 dw=30.6
-  cand wr=0.250 top2=0.520 dw=26.7
-[Round 14] best top2=0.520 wr=0.250 Δtop2=-0.020 (1.3s, 10200 games total)
-
-=== Round 15 === (elapsed 0.9 min, left 4.1 min)
-  cand wr=0.280 top2=0.490 dw=28.6
-  cand wr=0.160 top2=0.470 dw=29.8
-  cand wr=0.160 top2=0.500 dw=29.0
-  cand wr=0.260 top2=0.500 dw=27.6
-[Round 15] best top2=0.500 wr=0.260 Δtop2=-0.040 (1.3s, 10600 games total)
-
-=== Round 16 === (elapsed 0.9 min, left 4.1 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.130 top2=0.410 dw=33.0
-  cand wr=0.320 top2=0.630 dw=25.2
-  cand wr=0.270 top2=0.510 dw=29.0
-  cand wr=0.300 top2=0.590 dw=28.3
-[Round 16] best top2=0.630 wr=0.320 Δtop2=+0.090 (1.4s, 11000 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.480 Δ=-0.060
-  [REJECT] validation failed
-
-=== Round 17 === (elapsed 1.0 min, left 4.0 min)
-  cand wr=0.190 top2=0.410 dw=31.6
-  cand wr=0.240 top2=0.470 dw=28.4
-  cand wr=0.240 top2=0.500 dw=28.4
-  cand wr=0.270 top2=0.550 dw=28.2
-[Round 17] best top2=0.550 wr=0.270 Δtop2=+0.010 (1.3s, 11900 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.498 Δ=-0.042
-  [REJECT] validation failed
-
-=== Round 18 === (elapsed 1.1 min, left 3.9 min)
-  cand wr=0.230 top2=0.450 dw=30.1
-  cand wr=0.170 top2=0.470 dw=28.7
-  cand wr=0.300 top2=0.570 dw=27.4
-  cand wr=0.180 top2=0.420 dw=29.8
-[Round 18] best top2=0.570 wr=0.300 Δtop2=+0.030 (1.3s, 12800 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.522 Δ=-0.018
-  [REJECT] validation failed
-
-=== Round 19 === (elapsed 1.2 min, left 3.8 min)
-  cand wr=0.240 top2=0.410 dw=33.3
-  cand wr=0.300 top2=0.530 dw=26.8
-  cand wr=0.210 top2=0.520 dw=29.2
-  cand wr=0.260 top2=0.480 dw=28.9
-[Round 19] best top2=0.530 wr=0.300 Δtop2=-0.010 (1.3s, 13700 games total)
-
-=== Round 20 === (elapsed 1.2 min, left 3.8 min)
-  cand wr=0.250 top2=0.530 dw=30.6
-  cand wr=0.270 top2=0.490 dw=27.8
-  cand wr=0.190 top2=0.420 dw=31.7
-  cand wr=0.200 top2=0.490 dw=30.6
-[Round 20] best top2=0.530 wr=0.250 Δtop2=-0.010 (1.3s, 14100 games total)
-
-=== Round 21 === (elapsed 1.2 min, left 3.8 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.270 top2=0.550 dw=29.0
-  cand wr=0.340 top2=0.610 dw=27.0
-  cand wr=0.250 top2=0.530 dw=27.5
-  cand wr=0.230 top2=0.430 dw=30.8
-[Round 21] best top2=0.610 wr=0.340 Δtop2=+0.070 (1.3s, 14500 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.500 Δ=-0.040
-  [REJECT] validation failed
-
-=== Round 22 === (elapsed 1.3 min, left 3.7 min)
-  cand wr=0.190 top2=0.470 dw=30.0
-  cand wr=0.250 top2=0.570 dw=27.4
-  cand wr=0.290 top2=0.540 dw=28.2
-  cand wr=0.230 top2=0.520 dw=30.3
-[Round 22] best top2=0.570 wr=0.250 Δtop2=+0.030 (1.3s, 15400 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.474 Δ=-0.066
-  [REJECT] validation failed
-
-=== Round 23 === (elapsed 1.4 min, left 3.6 min)
-  cand wr=0.210 top2=0.450 dw=31.5
-  cand wr=0.250 top2=0.510 dw=29.9
-  cand wr=0.210 top2=0.420 dw=33.6
-  cand wr=0.230 top2=0.460 dw=29.3
-[Round 23] best top2=0.510 wr=0.250 Δtop2=-0.030 (1.3s, 16300 games total)
-
-=== Round 24 === (elapsed 1.4 min, left 3.6 min)
-  cand wr=0.300 top2=0.510 dw=27.6
-  cand wr=0.210 top2=0.520 dw=29.7
-  cand wr=0.280 top2=0.510 dw=27.2
-  cand wr=0.200 top2=0.510 dw=28.8
-[Round 24] best top2=0.520 wr=0.210 Δtop2=-0.020 (1.3s, 16700 games total)
-
-=== Round 25 === (elapsed 1.4 min, left 3.6 min)
-  cand wr=0.250 top2=0.530 dw=29.6
-  cand wr=0.340 top2=0.490 dw=27.4
-  cand wr=0.240 top2=0.460 dw=28.8
-  cand wr=0.300 top2=0.550 dw=27.9
-[Round 25] best top2=0.550 wr=0.300 Δtop2=+0.010 (1.3s, 17100 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.484 Δ=-0.056
-  [REJECT] validation failed
-
-=== Round 26 === (elapsed 1.5 min, left 3.5 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.230 top2=0.490 dw=29.6
-  cand wr=0.230 top2=0.500 dw=29.5
-  cand wr=0.220 top2=0.460 dw=31.2
-  cand wr=0.320 top2=0.520 dw=26.8
-[Round 26] best top2=0.520 wr=0.320 Δtop2=-0.020 (1.3s, 18000 games total)
-
-=== Round 27 === (elapsed 1.5 min, left 3.5 min)
-  cand wr=0.160 top2=0.400 dw=34.7
-  cand wr=0.240 top2=0.520 dw=30.8
-  cand wr=0.230 top2=0.500 dw=29.9
-  cand wr=0.280 top2=0.550 dw=27.9
-[Round 27] best top2=0.550 wr=0.280 Δtop2=+0.010 (1.3s, 18400 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.570 Δ=+0.030
-  [ADOPT] new baseline: top2=0.570 wr=0.284
-  [SAVE] weights.json updated
-
-=== Round 28 === (elapsed 1.6 min, left 3.4 min)
-  cand wr=0.250 top2=0.490 dw=29.7
-  cand wr=0.250 top2=0.470 dw=27.2
-  cand wr=0.290 top2=0.600 dw=27.4
-  cand wr=0.260 top2=0.510 dw=28.4
-[Round 28] best top2=0.600 wr=0.290 Δtop2=+0.030 (1.3s, 19300 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.478 Δ=-0.092
-  [REJECT] validation failed
-
-=== Round 29 === (elapsed 1.7 min, left 3.3 min)
-  cand wr=0.270 top2=0.480 dw=30.5
-  cand wr=0.250 top2=0.540 dw=27.6
-  cand wr=0.220 top2=0.440 dw=30.3
-  cand wr=0.280 top2=0.570 dw=27.8
-[Round 29] best top2=0.570 wr=0.280 Δtop2=+0.000 (1.3s, 20200 games total)
-
-=== Round 30 === (elapsed 1.7 min, left 3.3 min)
-  cand wr=0.310 top2=0.540 dw=25.7
-  cand wr=0.200 top2=0.440 dw=30.1
-  cand wr=0.330 top2=0.580 dw=25.9
-  cand wr=0.210 top2=0.430 dw=30.7
-[Round 30] best top2=0.580 wr=0.330 Δtop2=+0.010 (1.3s, 20600 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.500 Δ=-0.070
-  [REJECT] validation failed
-
-=== Round 31 === (elapsed 1.8 min, left 3.2 min)
-  cand wr=0.230 top2=0.500 dw=28.5
-  cand wr=0.280 top2=0.600 dw=26.7
-  cand wr=0.220 top2=0.470 dw=27.9
-  cand wr=0.160 top2=0.350 dw=31.1
-[Round 31] best top2=0.600 wr=0.280 Δtop2=+0.030 (1.4s, 21500 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.530 Δ=-0.040
-  [REJECT] validation failed
-
-=== Round 32 === (elapsed 1.9 min, left 3.1 min)
-  cand wr=0.280 top2=0.530 dw=27.3
-  cand wr=0.250 top2=0.500 dw=29.9
-  cand wr=0.190 top2=0.470 dw=29.2
-  cand wr=0.250 top2=0.530 dw=30.1
-[Round 32] best top2=0.530 wr=0.280 Δtop2=-0.040 (1.3s, 22400 games total)
-
-=== Round 33 === (elapsed 1.9 min, left 3.1 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.210 top2=0.410 dw=29.8
-  cand wr=0.250 top2=0.520 dw=28.1
-  cand wr=0.290 top2=0.560 dw=25.3
-  cand wr=0.150 top2=0.530 dw=26.4
-[Round 33] best top2=0.560 wr=0.290 Δtop2=-0.010 (1.4s, 22800 games total)
-
-=== Round 34 === (elapsed 2.0 min, left 3.0 min)
-  cand wr=0.230 top2=0.510 dw=28.4
-  cand wr=0.300 top2=0.570 dw=27.1
-  cand wr=0.240 top2=0.490 dw=28.8
-  cand wr=0.300 top2=0.510 dw=27.3
-[Round 34] best top2=0.570 wr=0.300 Δtop2=+0.000 (1.3s, 23200 games total)
-
-=== Round 35 === (elapsed 2.0 min, left 3.0 min)
-  cand wr=0.210 top2=0.530 dw=28.7
-  cand wr=0.280 top2=0.490 dw=29.6
-  cand wr=0.240 top2=0.460 dw=27.5
-  cand wr=0.130 top2=0.300 dw=31.9
-[Round 35] best top2=0.530 wr=0.210 Δtop2=-0.040 (1.4s, 23600 games total)
-
-=== Round 36 === (elapsed 2.0 min, left 3.0 min)
-  cand wr=0.340 top2=0.550 dw=25.8
-  cand wr=0.230 top2=0.520 dw=28.7
-  cand wr=0.230 top2=0.530 dw=27.8
-  cand wr=0.310 top2=0.570 dw=26.8
-[Round 36] best top2=0.570 wr=0.310 Δtop2=+0.000 (1.3s, 24000 games total)
-
-=== Round 37 === (elapsed 2.0 min, left 3.0 min)
-  cand wr=0.330 top2=0.510 dw=29.3
-  cand wr=0.200 top2=0.420 dw=29.9
-  cand wr=0.290 top2=0.480 dw=27.9
-  cand wr=0.180 top2=0.530 dw=28.5
-[Round 37] best top2=0.530 wr=0.180 Δtop2=-0.040 (1.3s, 24400 games total)
-
-=== Round 38 === (elapsed 2.0 min, left 3.0 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.220 top2=0.520 dw=29.8
-  cand wr=0.270 top2=0.550 dw=29.0
-  cand wr=0.230 top2=0.420 dw=28.4
-  cand wr=0.290 top2=0.540 dw=27.6
-[Round 38] best top2=0.550 wr=0.270 Δtop2=-0.020 (1.3s, 24800 games total)
-
-=== Round 39 === (elapsed 2.1 min, left 2.9 min)
-  cand wr=0.230 top2=0.490 dw=30.5
-  cand wr=0.190 top2=0.410 dw=30.8
-  cand wr=0.210 top2=0.460 dw=29.4
-  cand wr=0.200 top2=0.390 dw=29.2
-[Round 39] best top2=0.490 wr=0.230 Δtop2=-0.080 (1.3s, 25200 games total)
-
-=== Round 40 === (elapsed 2.1 min, left 2.9 min)
-  cand wr=0.270 top2=0.560 dw=27.9
-  cand wr=0.280 top2=0.520 dw=30.1
-  cand wr=0.280 top2=0.580 dw=27.2
-  cand wr=0.190 top2=0.400 dw=29.6
-[Round 40] best top2=0.580 wr=0.280 Δtop2=+0.010 (1.3s, 25600 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.440 Δ=-0.130
-  [REJECT] validation failed
-
-=== Round 41 === (elapsed 2.2 min, left 2.8 min)
-  cand wr=0.290 top2=0.570 dw=28.7
-  cand wr=0.280 top2=0.550 dw=27.0
-  cand wr=0.330 top2=0.600 dw=26.5
-  cand wr=0.220 top2=0.510 dw=29.1
-[Round 41] best top2=0.600 wr=0.330 Δtop2=+0.030 (1.3s, 26500 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.566 Δ=-0.004
-  [REJECT] validation failed
-
-=== Round 42 === (elapsed 2.3 min, left 2.7 min)
-  cand wr=0.210 top2=0.460 dw=30.3
-  cand wr=0.210 top2=0.490 dw=30.0
-  cand wr=0.280 top2=0.480 dw=27.7
-  cand wr=0.310 top2=0.550 dw=25.7
-[Round 42] best top2=0.550 wr=0.310 Δtop2=-0.020 (1.3s, 27400 games total)
-
-=== Round 43 === (elapsed 2.3 min, left 2.7 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.190 top2=0.440 dw=31.0
-  cand wr=0.250 top2=0.470 dw=29.7
-  cand wr=0.220 top2=0.560 dw=25.8
-  cand wr=0.250 top2=0.520 dw=28.2
-[Round 43] best top2=0.560 wr=0.220 Δtop2=-0.010 (1.3s, 27800 games total)
-
-=== Round 44 === (elapsed 2.3 min, left 2.7 min)
-  cand wr=0.260 top2=0.480 dw=29.1
-  cand wr=0.330 top2=0.620 dw=23.0
-  cand wr=0.230 top2=0.490 dw=30.1
-  cand wr=0.270 top2=0.510 dw=29.1
-[Round 44] best top2=0.620 wr=0.330 Δtop2=+0.050 (1.3s, 28200 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.470 Δ=-0.100
-  [REJECT] validation failed
-
-=== Round 45 === (elapsed 2.4 min, left 2.6 min)
-  cand wr=0.260 top2=0.490 dw=28.7
-  cand wr=0.330 top2=0.590 dw=26.9
-  cand wr=0.180 top2=0.420 dw=29.7
-  cand wr=0.350 top2=0.610 dw=24.0
-[Round 45] best top2=0.610 wr=0.350 Δtop2=+0.040 (1.4s, 29100 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.540 Δ=-0.030
-  [REJECT] validation failed
-
-=== Round 46 === (elapsed 2.5 min, left 2.5 min)
-  cand wr=0.290 top2=0.500 dw=29.5
-  cand wr=0.200 top2=0.550 dw=30.0
-  cand wr=0.180 top2=0.520 dw=28.5
-  cand wr=0.250 top2=0.530 dw=26.5
-[Round 46] best top2=0.550 wr=0.200 Δtop2=-0.020 (1.3s, 30000 games total)
-
-=== Round 47 === (elapsed 2.5 min, left 2.5 min)
-  cand wr=0.240 top2=0.430 dw=29.3
-  cand wr=0.220 top2=0.420 dw=29.5
-  cand wr=0.260 top2=0.490 dw=28.3
-  cand wr=0.210 top2=0.430 dw=27.8
-[Round 47] best top2=0.490 wr=0.260 Δtop2=-0.080 (1.3s, 30400 games total)
-
-=== Round 48 === (elapsed 2.5 min, left 2.5 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.270 top2=0.480 dw=27.3
-  cand wr=0.220 top2=0.480 dw=28.9
-  cand wr=0.280 top2=0.510 dw=28.6
-  cand wr=0.310 top2=0.490 dw=26.5
-[Round 48] best top2=0.510 wr=0.280 Δtop2=-0.060 (1.3s, 30800 games total)
-
-=== Round 49 === (elapsed 2.6 min, left 2.4 min)
-  cand wr=0.200 top2=0.470 dw=28.8
-  cand wr=0.300 top2=0.580 dw=26.9
-  cand wr=0.310 top2=0.560 dw=25.2
-  cand wr=0.250 top2=0.460 dw=28.7
-[Round 49] best top2=0.580 wr=0.300 Δtop2=+0.010 (1.3s, 31200 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.480 Δ=-0.090
-  [REJECT] validation failed
-
-=== Round 50 === (elapsed 2.6 min, left 2.4 min)
-  cand wr=0.280 top2=0.570 dw=27.1
-  cand wr=0.290 top2=0.460 dw=27.2
-  cand wr=0.180 top2=0.420 dw=29.6
-  cand wr=0.150 top2=0.370 dw=31.9
-[Round 50] best top2=0.570 wr=0.280 Δtop2=+0.000 (1.4s, 32100 games total)
-
-=== Round 51 === (elapsed 2.7 min, left 2.3 min)
-  cand wr=0.230 top2=0.480 dw=29.0
-  cand wr=0.310 top2=0.570 dw=25.6
-  cand wr=0.260 top2=0.510 dw=27.4
-  cand wr=0.250 top2=0.530 dw=27.6
-[Round 51] best top2=0.570 wr=0.310 Δtop2=+0.000 (1.4s, 32500 games total)
-
-=== Round 52 === (elapsed 2.7 min, left 2.3 min)
-  cand wr=0.150 top2=0.490 dw=30.8
-  cand wr=0.240 top2=0.530 dw=28.7
-  cand wr=0.250 top2=0.560 dw=27.0
-  cand wr=0.320 top2=0.560 dw=25.0
-[Round 52] best top2=0.560 wr=0.320 Δtop2=-0.010 (1.4s, 32900 games total)
-
-=== Round 53 === (elapsed 2.7 min, left 2.3 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.330 top2=0.540 dw=27.4
-  cand wr=0.260 top2=0.490 dw=27.6
-  cand wr=0.220 top2=0.490 dw=30.1
-  cand wr=0.200 top2=0.480 dw=28.8
-[Round 53] best top2=0.540 wr=0.330 Δtop2=-0.030 (1.3s, 33300 games total)
-
-=== Round 54 === (elapsed 2.7 min, left 2.3 min)
-  cand wr=0.240 top2=0.510 dw=29.0
-  cand wr=0.260 top2=0.430 dw=28.9
-  cand wr=0.190 top2=0.460 dw=29.1
-  cand wr=0.260 top2=0.520 dw=28.4
-[Round 54] best top2=0.520 wr=0.260 Δtop2=-0.050 (1.4s, 33700 games total)
-
-=== Round 55 === (elapsed 2.8 min, left 2.2 min)
-  cand wr=0.220 top2=0.550 dw=28.1
-  cand wr=0.280 top2=0.530 dw=27.6
-  cand wr=0.270 top2=0.500 dw=27.4
-  cand wr=0.260 top2=0.450 dw=27.8
-[Round 55] best top2=0.550 wr=0.220 Δtop2=-0.020 (1.3s, 34100 games total)
-
-=== Round 56 === (elapsed 2.8 min, left 2.2 min)
-  cand wr=0.280 top2=0.420 dw=32.0
-  cand wr=0.280 top2=0.500 dw=30.0
-  cand wr=0.320 top2=0.570 dw=28.0
-  cand wr=0.280 top2=0.450 dw=27.7
-[Round 56] best top2=0.570 wr=0.320 Δtop2=+0.000 (1.3s, 34500 games total)
-
-=== Round 57 === (elapsed 2.8 min, left 2.2 min)
-  cand wr=0.260 top2=0.500 dw=27.9
-  cand wr=0.170 top2=0.390 dw=30.0
-  cand wr=0.280 top2=0.550 dw=27.5
-  cand wr=0.190 top2=0.550 dw=27.5
-[Round 57] best top2=0.550 wr=0.280 Δtop2=-0.020 (1.3s, 34900 games total)
-
-=== Round 58 === (elapsed 2.8 min, left 2.2 min)
-  [RESTART] stale 5 rounds — perturbing from DEFAULT
-  cand wr=0.250 top2=0.500 dw=29.5
-  cand wr=0.250 top2=0.510 dw=26.9
-  cand wr=0.280 top2=0.500 dw=27.5
-  cand wr=0.220 top2=0.460 dw=27.8
-[Round 58] best top2=0.510 wr=0.250 Δtop2=-0.060 (1.3s, 35300 games total)
-
-=== Round 59 === (elapsed 2.8 min, left 2.2 min)
-  cand wr=0.160 top2=0.490 dw=28.3
-  cand wr=0.300 top2=0.600 dw=24.6
-  cand wr=0.250 top2=0.500 dw=28.5
-  cand wr=0.230 top2=0.390 dw=29.1
-[Round 59] best top2=0.600 wr=0.300 Δtop2=+0.030 (1.3s, 35700 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.460 Δ=-0.110
-  [REJECT] validation failed
-
-=== Round 60 === (elapsed 2.9 min, left 2.1 min)
-  cand wr=0.250 top2=0.480 dw=27.2
-  cand wr=0.250 top2=0.480 dw=27.3
-  cand wr=0.320 top2=0.470 dw=27.9
-  cand wr=0.240 top2=0.460 dw=28.1
-[Round 60] best top2=0.480 wr=0.250 Δtop2=-0.090 (1.4s, 36600 games total)
-
-=== Round 61 === (elapsed 3.0 min, left 2.0 min)
-  cand wr=0.170 top2=0.490 dw=30.0
-  cand wr=0.190 top2=0.460 dw=29.2
-  cand wr=0.280 top2=0.520 dw=27.4
-  cand wr=0.290 top2=0.540 dw=25.8
-[Round 61] best top2=0.540 wr=0.290 Δtop2=-0.030 (1.4s, 37000 games total)
-
-=== Round 62 === (elapsed 3.0 min, left 2.0 min)
-  cand wr=0.240 top2=0.520 dw=28.9
-  cand wr=0.260 top2=0.590 dw=24.9
-  cand wr=0.210 top2=0.450 dw=29.6
-  cand wr=0.270 top2=0.470 dw=29.2
-[Round 62] best top2=0.590 wr=0.260 Δtop2=+0.020 (1.4s, 37400 games total)
-  [VALIDATE] Validating with 500 games...
-  [VALIDATE] top2=0.440 Δ=-0.130
-  [REJECT] validation failed
-
-[STOP] Only 116s left — stopping
-
-=== DONE ===
-Total runtime: 3.1 min (184s)
-Total games: 37,900
-Games/sec: 206
-Rounds: 63
-Final top2_rate: 0.570
-Final win_rate:  0.284
-
-Final weights:
-{
-  "early": {
-    "deadwood": 0.8275,
-    "own_neighbour": 1.0004,
-    "safety": 0.437,
-    "danger": 0.4937,
-    "melds_after": 1.282
-  },
-  "middle": {
-    "deadwood": 0.453,
-    "own_neighbour": 0.932,
-    "safety": 1.1197,
-    "danger": 1.4803,
-    "melds_after": 1.9708
-  },
-  "final": {
-    "deadwood": 0.4963,
-    "own_neighbour": 0.3345,
-    "safety": 0.9847,
-    "danger": 2.1787,
-    "melds_after": 3.004
-  }
-}
-
-Saved to: weights.json
+=== Jieqi Self-Play Tuner ===
+Binary: /home/runner/work/zai/zai/pikajieqi-native
+Budget: 999999 games
+Games per eval: 30
+Workers: 2
+Movetime: 300ms/move
+Threshold: 5.0%
+Output: jieqi_best_params.json
+Default params: {'Threads': '1', 'Hash': '64', 'MultiPV': '1', 'Move Overhead': '10', 'Slow Mover': '100', 'Skill Level': '20', 'UCI_AnalyseMode': 'false'}
+
+[BOOT] Measuring baseline (30 games)...
+[BOOT] baseline wr=0.433 (draws=0/30)
+
+=== Iteration 1 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Move Overhead=100         wr=0.600 (W18-L12-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.533 (W16-L14-D0)
+  Skill Level=10            wr=0.600 (W18-L12-D0)
+  Skill Level=15            wr=0.367 (W11-L19-D0)
+  Skill Level=18            wr=0.333 (W10-L20-D0)
+  Skill Level=19            wr=0.467 (W14-L16-D0)
+[iter 1] best wr=0.600 (baseline 0.433, Δ=+0.167)
+[ADOPT] new baseline: {'Threads': '1', 'Hash': '64', 'MultiPV': '1', 'Move Overhead': '100', 'Slow Mover': '100', 'Skill Level': '20', 'UCI_AnalyseMode': 'false'}
+
+[SAVE] jieqi_best_params.json
+[SAVE] jieqi_best_params.json
+=== Iteration 2 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 2] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 3 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 3] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 4 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 4] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 5 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 5] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 6 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 6] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 7 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 7] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 8 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 8] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 9 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 9] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 10 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 10] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 11 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.500 (W15-L15-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 11] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 12 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.467 (W14-L16-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 12] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 13 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 13] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 14 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 14] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 15 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.500 (W15-L15-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 15] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 16 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 16] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 17 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 17] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 18 ===
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 18] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 19 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.500 (W15-L15-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 19] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 20 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 20] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 21 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.500 (W15-L15-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 21] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 22 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 22] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 23 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 23] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 24 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 24] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 25 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 25] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 26 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 26] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 27 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)
+  Skill Level=15            wr=0.600 (W18-L12-D0)
+  Skill Level=18            wr=0.367 (W11-L19-D0)
+  Skill Level=19            wr=0.333 (W10-L20-D0)
+[iter 27] best wr=0.600 (baseline 0.600, Δ=+0.000)
+[REJECT] no significant improvement
+
+[SAVE] jieqi_best_params.json
+=== Iteration 28 ===
+  Threads=2                 wr=0.533 (W16-L14-D0)
+  Hash=32                   wr=0.467 (W14-L16-D0)
+  Hash=128                  wr=0.500 (W15-L15-D0)
+  Hash=256                  wr=0.500 (W15-L15-D0)
+  MultiPV=2                 wr=0.567 (W17-L13-D0)
+  MultiPV=3                 wr=0.533 (W16-L14-D0)
+  Move Overhead=5           wr=0.567 (W17-L13-D0)
+  Move Overhead=30          wr=0.533 (W16-L14-D0)
+  Slow Mover=50             wr=0.600 (W18-L12-D0)
+  Slow Mover=200            wr=0.600 (W18-L12-D0)
+  Skill Level=10            wr=0.533 (W16-L14-D0)

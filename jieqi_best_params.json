@@ -1,0 +1,16 @@
+{
+  "params": {
+    "Threads": "1",
+    "Hash": "64",
+    "MultiPV": "1",
+    "Move Overhead": "100",
+    "Slow Mover": "100",
+    "Skill Level": "20",
+    "UCI_AnalyseMode": "false"
+  },
+  "win_rate": 0.6,
+  "games_used": 22800,
+  "iteration": 27,
+  "source": "self-play-checkpoint-iter27",
+  "updated_at": "2026-09-26T07:20:20Z"
+}
