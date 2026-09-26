@@ -68,7 +68,7 @@ KICK_DELAY = 5.0
 
 # ==================== TẠO BÀN CỐ ĐỊNH 5000 XU ====================
 # ★ CHỈ TẠO BÀN — KHÔNG TÌM BÀN, KHÔNG QUICK_PLAY
-CREATE_BET_VALUE = 5000
+CREATE_BET_VALUE = 2000
 BOT_BET_XU = CREATE_BET_VALUE
 
 # Không dùng QUICK_PLAY nữa
