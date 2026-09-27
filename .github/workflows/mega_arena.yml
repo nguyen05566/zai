@@ -10,7 +10,7 @@ on:
 
 jobs:
   mega-arena:
-    runs-on: [ubuntu-latest, ubuntu-24.04, ubuntu-22.04]
+    runs-on: ubuntu-24.04
     timeout-minutes: 340  # 5h40m hard cap (slightly more than runtime)
     steps:
       - name: Checkout code
