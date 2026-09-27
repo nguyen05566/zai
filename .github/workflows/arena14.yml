@@ -5,11 +5,29 @@ on:
 
 
 
+concurrency:
+  group: arena14-runner
+  cancel-in-progress: false
+
+
 jobs:
   run-bot:
-    runs-on: ubuntu-latest
+    runs-on: [ubuntu-latest, ubuntu-24.04, ubuntu-22.04]
     timeout-minutes: 350
     steps:
+    - name: Wait for available runner (avoid queue pile-up)
+      run: |
+        echo "Waiting up to 15 minutes for a runner to be available..."
+        for i in $(seq 1 90); do
+          # Check if we're actually running (not queued)
+          if [ "$RUNNER_NAME" != "" ]; then
+            echo "Runner assigned: $RUNNER_NAME"
+            break
+          fi
+          echo "  Attempt $i/90: still waiting..."
+          sleep 10
+        done
+        echo "Proceeding with job"
     - name: Checkout code
       uses: actions/checkout@v4
 
