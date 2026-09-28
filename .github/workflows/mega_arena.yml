@@ -7,11 +7,20 @@ on:
         description: 'Max runtime in hours (default 5.5)'
         required: false
         default: '5.5'
+  schedule:
+    # Chạy mỗi 6 giờ (giờ UTC) — tương ứng 07:00, 13:00, 19:00, 01:00 giờ VN
+    - cron: '0 */6 * * *'
+  push:
+    branches: [main]
+
+concurrency:
+  group: mega-arena
+  cancel-in-progress: false
 
 jobs:
   mega-arena:
     runs-on: ubuntu-24.04
-    timeout-minutes: 340  # 5h40m hard cap (slightly more than runtime)
+    timeout-minutes: 340
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,7 +33,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential
+          sudo apt-get install -y -qq build-essential bc
 
       - name: Install Python dependencies
         run: pip install websocket-client requests
@@ -35,9 +44,18 @@ jobs:
       - name: Verify engine
         run: bash verify_jieqi_core.sh ./jieqi-core
 
+      - name: Verify bot files
+        run: |
+          echo "=== Python files in workspace ==="
+          ls -la *.py
+          echo "=== Python syntax check ==="
+          for f in *.py; do
+            python3 -m py_compile "$f" && echo "  $f: OK" || echo "  $f: FAILED"
+          done
+
       - name: Show config
         run: |
-          RUNTIME_HOURS="${{ github.event.inputs.runtime_hours || '5.5' }}"
+          RUNTIME_HOURS="${{ inputs.runtime_hours || '5.5' }}"
           RUNTIME_SEC=$(echo "$RUNTIME_HOURS * 3600" | bc | cut -d. -f1)
           echo "Runtime: $RUNTIME_HOURS hours ($RUNTIME_SEC sec)"
           echo "Bots: arena5, arena6, arena8, arena14, arena15, arena18, arena19, arena13"
