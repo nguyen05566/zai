@@ -574,7 +574,7 @@ class PikafishBot:
         self._search_room_idx = _offset % len(self.ROOM_LIST)
         self._search_bet_idx = 0
         self._quick_play_attempts = 0
-        self._current_lobby_idx = _offset % len(LOBBY_LIST)
+        self._current_lobby_idx = 0
         self._lobbies_tried = 0
         self._sit_alone_since = None
         self._table_created_by_me = False
