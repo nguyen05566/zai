@@ -81,8 +81,8 @@ class _UrllibSession:
 requests = type('R', (), {'Session': _UrllibSession})()
 
 # ==================== TÀI KHOẢN ====================
-CARO_USER_DIRECT = "pinto"
-CARO_PASSWD_DIRECT = "tuanh123"
+CARO_USER_DIRECT = "test2"
+CARO_PASSWD_DIRECT = "a12346"
 
 def _clean_env(val, default):
     if val and str(val).strip():
