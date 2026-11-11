@@ -710,6 +710,22 @@ class JqeEngine:
             time.sleep(0.02)
         return True
 
+    def _sync_engine(self, timeout=8.0):
+        """Dừng search cũ và chờ engine rảnh (stop + isready/readyok).
+
+        Cần thiết khi ván mới bắt đầu: nếu search của ván trước chưa kết
+        thúc, bestmove cũ có thể lọt vào và bị server từ chối
+        (đã thấy: status=51 Xiangqi.NoPieceAtSourcePosition).
+        """
+        try:
+            with self.engine_lock:
+                self._readyok = False
+                self.proc.stdin.write("stop\nisready\n")
+                self.proc.stdin.flush()
+            self._wait_for_readyok(timeout=timeout)
+        except Exception:
+            pass
+
     def restart(self):
         if self._restart_count >= MAX_ENGINE_RESTARTS_PER_GAME:
             print(f"[ENGINE] ❌ Quá {MAX_ENGINE_RESTARTS_PER_GAME} restarts")
@@ -723,6 +739,9 @@ class JqeEngine:
         if not self.alive():
             if not self.restart():
                 return None
+        # Đồng bộ trước: search cũ phải kết thúc trước khi xin nước mới,
+        # nếu không bestmove của ván trước sẽ bị gửi lên bàn mới.
+        self._sync_engine()
         self._latest_bestmove = None
         self._engine_searching = True
         with self._lines_lock:

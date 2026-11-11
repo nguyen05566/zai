@@ -7,3 +7,6 @@ jieqi-core
 pikajieqi-mistboard
 jqe
 jqe-engine/
+
+# WS capture logs (local research)
+ws_capture/
