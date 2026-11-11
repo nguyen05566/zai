@@ -1,9 +1,11 @@
 """
-cup_bot_mistboard.py — Cờ Úp Bot dùng bản PikaJieQi build theo Mistboard
-Khác biệt vs cup_bot.py:
-Engine: pikajieqi-mistboard (C++ native, không cần wine)
+cup_bot_mistboard.py — Cờ Úp Bot
+[SỬA 2026-11] Đổi engine sang jqe (https://github.com/devinokeefe/jieqi)
+  - UCI thuần, position startpos moves <token có reveal suffix> như PikaJieQi
+  - BẮT BUỘC setoption EvalFile → jqe-it014.jqn (không có net sẽ yếu hơn nhiều)
+  - alpha-beta + NNUE (it014), mạnh hơn pikajieqi-mistboard ~+211 Elo (REPORT.md)
 Movetime: 2000ms (~2s/nước cho nhanh)
-Tự restart engine mỗi lượt (Jieqi không có isready reliable, dùng fork-and-think)
+Tự restart engine mỗi lượt (dùng fork-and-think)
 BAG updates: gửi kèm moves list để Jieqi sync state
 
 [BẢN SỬA] Bot KHÔNG tự kick/Thoát khi thua — luôn ở lại bàn và ready ván mới.
@@ -103,10 +105,18 @@ GAME_ID = 'mystery_xiangqi'
 PLACE_PATH = 'Lobby.mystery_xiangqi.0'
 
 # === ENGINE CONFIG ===
-PIKAJIEQI_BINARY_CANDIDATES = [
-    os.environ.get("MISTBOARD_JIEQI_ENGINE", os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "pikajieqi-mistboard"
-    )),
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+JQE_BINARY_CANDIDATES = [
+    os.environ.get("JQE_ENGINE"),
+    os.path.join(_SCRIPT_DIR, "jqe"),
+    os.path.join(_SCRIPT_DIR, "jqe-engine", "engine", "build", "jqe"),
+    os.environ.get("MISTBOARD_JIEQI_ENGINE"),  # compat cũ
+]
+# Net bắt buộc cho jqe: không có EvalFile engine dùng eval thủ công (yếu hơn nhiều)
+JQE_NET_CANDIDATES = [
+    os.environ.get("JQE_NET"),
+    os.path.join(_SCRIPT_DIR, "jqe-it014.jqn"),
+    os.path.join(_SCRIPT_DIR, "jqe-engine", "engine", "nets", "it014.jqn"),
 ]
 
 ENGINE_MULTIPV = 1
@@ -584,10 +594,11 @@ class VisibleBoard:
         return '/'.join(rows) + ' ' + self.side_to_move + ' - - 0 1'
 
 
-class MistboardJieqiEngine:
+class JqeEngine:
     def __init__(self):
         self.proc = None
         self.binary_path = None
+        self.net_path = None
         self.engine_lock = threading.Lock()
         self._readyok = False
         self._latest_bestmove = None
@@ -597,15 +608,23 @@ class MistboardJieqiEngine:
         self._restart_count = 0
         self._stdout_lines = []
         self._lines_lock = threading.Lock()
-        for path in PIKAJIEQI_BINARY_CANDIDATES:
-            if os.path.isfile(path) and os.access(path, os.X_OK):
+        for path in JQE_BINARY_CANDIDATES:
+            if path and os.path.isfile(path) and os.access(path, os.X_OK):
                 self.binary_path = path
                 break
         if not self.binary_path:
-            print(f"[ENGINE] ❌ Không tìm thấy pikajieqi-mistboard binary. Đã thử: {PIKAJIEQI_BINARY_CANDIDATES}")
+            print(f"[ENGINE] ❌ Không tìm thấy jqe binary. Đã thử: {[p for p in JQE_BINARY_CANDIDATES if p]}")
             self.engine = False
             return
-        print(f"[ENGINE] 🎯 pikajieqi-mistboard = {self.binary_path}")
+        for path in JQE_NET_CANDIDATES:
+            if path and os.path.isfile(path):
+                self.net_path = path
+                break
+        if not self.net_path:
+            print("[ENGINE] ⚠️ KHÔNG tìm thấy net (jqe-it014.jqn) — jqe sẽ dùng eval thủ công YẾU HƠN NHIỀU!")
+        print(f"[ENGINE] 🎯 jqe = {self.binary_path}")
+        if self.net_path:
+            print(f"[ENGINE] 🧠 net = {self.net_path}")
 
         self._init_engine()
         self.engine = self.proc is not None
@@ -677,9 +696,10 @@ class MistboardJieqiEngine:
             print("[ENGINE] ❌ uciok timeout")
             self._kill()
             return
-        nnue_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pikafish.nnue")
-        # Load tuned params from jieqi_best_params.json (auto-tuned by
-        # .github/workflows/jieqi_tune.yml). Falls back to defaults if missing.
+        # Net file là BẮT BUỘC với jqe (EvalFile) — không có sẽ fallback eval thủ công yếu.
+        # Load tuned params từ jieqi_best_params.json (auto-tune của bản PikaJieQi cũ).
+        # jqe chỉ dùng Threads/Hash; các param PikaJieQi (Move Overhead, Slow Mover,
+        # Skill Level, MultiPV) jqe không có nên bỏ qua.
         params_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jieqi_best_params.json")
         tuned = {}
         if os.path.isfile(params_path):
@@ -697,18 +717,10 @@ class MistboardJieqiEngine:
             try:
                 _threads = tuned.get("Threads") or str(max(1, min(2, (os.cpu_count() or 2) - 1)))
                 _hash = tuned.get("Hash") or "128"
-                _multipv = tuned.get("MultiPV") or "1"
                 self.proc.stdin.write(f"setoption name Threads value {_threads}\n")
                 self.proc.stdin.write(f"setoption name Hash value {_hash}\n")
-                # Mistboard's pinned classical jieqi_old build does not require
-                # an NNUE file. Use it only when the optional net is present.
-                if os.path.isfile(nnue_path):
-                    self.proc.stdin.write(f"setoption name EvalFile value {nnue_path}\n")
-                self.proc.stdin.write(f"setoption name MultiPV value {_multipv}\n")
-                # Apply other tuned params if present
-                for _p in ("Move Overhead", "Slow Mover", "Skill Level"):
-                    if _p in tuned:
-                        self.proc.stdin.write(f"setoption name {_p} value {tuned[_p]}\n")
+                if self.net_path:
+                    self.proc.stdin.write(f"setoption name EvalFile value {self.net_path}\n")
                 self.proc.stdin.write("isready\n")
                 self.proc.stdin.flush()
             except Exception as e:
@@ -718,7 +730,7 @@ class MistboardJieqiEngine:
             print("[ENGINE] ❌ readyok timeout")
             self._kill()
             return
-        print("[ENGINE] ✅ pikajieqi-mistboard ready")
+        print("[ENGINE] ✅ jqe ready")
 
     def _wait_for_line(self, prefix, timeout=10):
         t0 = time.time()
@@ -767,10 +779,9 @@ class MistboardJieqiEngine:
         with self._lines_lock:
             self._stdout_lines.clear()
         try:
-            # ★ Use "position startpos moves ..." — PikaJieQi's native format
-            # PikaJieQi auto-tracks BAG and dark piece reveals from move suffixes
-            # BAG updates correctly: c3c4N → N2→N1 in BAG
-            # Engine uses BAG for expected value calculation in flip_search
+            # ★ Use "position startpos moves ..." — format chung của hệ Pikafish-jieqi
+            # Token move mang reveal suffix (a3a4P, b2b9Pr) → jqe tự track urn/BAG
+            # và dùng xác suất urn cho chance nodes khi đi quân úp.
             cmd = "position startpos"
             if moves:
                 cmd += " moves " + " ".join(moves)
@@ -866,7 +877,7 @@ class JieqiCupBot:
         self._game_seq = 0
         self._moves_len_at_turn_start = 0
 
-        self.engine = MistboardJieqiEngine()
+        self.engine = JqeEngine()
         if not self.engine.engine:
             print("[BOT] ❌ Engine not ready — bot will not be able to think")
         else:

@@ -3,6 +3,12 @@ name: Arena14
 on:
   workflow_dispatch:
 
+env:
+  # Pin jqe upstream (devinokeefe/jieqi) — bản đo được trong REPORT.md
+  JQE_COMMIT: 331a6e612a038c4a04cf980f7b9482910fd50078
+  # sha256 của engine/nets/it014.jqn theo engine/README.md
+  JQE_NET_SHA256: f90bd44e8ee244405eb08eb4f784e3f156900f0691f651b5124d50032f8ba160
+
 jobs:
   run-bot:
     runs-on: ubuntu-24.04
@@ -19,20 +25,35 @@ jobs:
     - name: Install build dependencies
       run: |
         sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential
+        sudo apt-get install -y -qq build-essential cmake
 
     - name: Install Python dependencies
       run: pip install websocket-client requests
 
-    - name: Build pinned JieqiCore engine
-      run: bash build_engine_jieqi_core.sh
+    - name: Verify jqe net checksum
+      run: |
+        echo "${JQE_NET_SHA256}  jqe-it014.jqn" | sha256sum -c -
 
-    - name: Verify engine
-      run: bash verify_jieqi_core.sh ./jieqi-core
+    - name: Build jqe engine (pinned commit)
+      run: |
+        mkdir jqe-engine
+        curl -sL "https://github.com/devinokeefe/jieqi/archive/${JQE_COMMIT}.tar.gz" \
+          | tar xz -C jqe-engine --strip-components=1
+        cmake -S jqe-engine/engine -B jqe-engine/engine/build -DCMAKE_BUILD_TYPE=Release
+        cmake --build jqe-engine/engine/build -j"$(nproc)" --target jqe
 
-    - name: Run JieqiCore bot
+    - name: Verify engine (bench signature 45315 nodes với it014)
+      run: |
+        BIN=jqe-engine/engine/build/jqe
+        chmod +x "$BIN"
+        printf 'setoption name EvalFile value %s/jqe-it014.jqn\nbench\nquit\n' "$PWD" \
+          | "$BIN" | tee bench.log
+        grep -q "Nodes searched: 45315" bench.log
+
+    - name: Run jqe bot
       env:
-        MISTBOARD_JIEQI_ENGINE: ./jieqi-core
+        JQE_ENGINE: ./jqe-engine/engine/build/jqe
+        JQE_NET: ./jqe-it014.jqn
       run: python3 -u arena14.py
       timeout-minutes: 340
 
