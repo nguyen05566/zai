@@ -391,17 +391,13 @@ class InboundMessage:
     def rem(self):
         return len(self.data) - self.offset
 
-STANDARD_PAWN_POSITIONS = set()
-for _c in [0, 2, 4, 6, 8]:
-    STANDARD_PAWN_POSITIONS.add(6 * 9 + _c)
-    STANDARD_PAWN_POSITIONS.add(3 * 9 + _c)
 
 INITIAL_BAG = {'A': 2, 'B': 2, 'N': 2, 'R': 2, 'C': 2, 'P': 5,
                'a': 2, 'b': 2, 'n': 2, 'r': 2, 'c': 2, 'p': 5}
 BAG_ORDER = ['A', 'B', 'N', 'R', 'C', 'P', 'a', 'b', 'n', 'r', 'c', 'p']
 
 UCI_MOVE_RE = re.compile(r'^[a-i]\d[a-i]\d$')
-UCI_MOVE_WITH_SUFFIX_RE = re.compile(r'^[a-i]\d[a-i]\d[a-zA-Z]?$')
+UCI_MOVE_WITH_SUFFIX_RE = re.compile(r'^[a-i]\d[a-i]\d[a-zA-Z]{0,2}$')
 
 class XiangqiBoardTracker:
     INITIAL_FEN = "xxxxkxxxx/9/1x5x1/x1x1x1x1x/9/9/X1X1X1X1X/1X5X1/9/XXXXKXXXX w"
@@ -447,9 +443,10 @@ class XiangqiBoardTracker:
 
     def bag_string(self):
         bag = dict(INITIAL_BAG)
-        for ch in self.revealed_chars:
-            if ch in bag:
-                bag[ch] = max(0, bag[ch] - 1)
+        for entry in self.revealed_chars:
+            for ch in entry:  # entry có thể 'C' hoặc 'Cp' (mover + victim)
+                if ch in bag:
+                    bag[ch] = max(0, bag[ch] - 1)
         return "".join(f"{k}{bag[k]}" for k in BAG_ORDER)
 
     def get_current_fen(self):
@@ -466,11 +463,15 @@ class XiangqiBoardTracker:
         self.revealed_chars = []
         self.dark_positions.clear()
 
-    def record_move(self, mv, revealed_char=None):
-        uci = mv + (revealed_char or "")
+    def record_move(self, mv, suffix=None):
+        """suffix: '' | 'C' | 'Cp' — mover-reveal (+ victim-reveal nếu ăn
+        quân úp). jqe phân biệt theo chữ hoa/thường (hoa=đỏ, thường=đen)."""
+        suffix = suffix or ""
+        uci = mv + suffix
         self.uci_moves.append(uci)
-        if revealed_char:
-            self.revealed_chars.append(revealed_char)
+        for ch in suffix:
+            if ch.isalpha():
+                self.revealed_chars.append(ch)
         self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
         return uci
 
@@ -526,73 +527,6 @@ class XiangqiBoardTracker:
         if K_row < 7 or k_row > 2:
             return False, f"tướng sai chiều (K hàng {K_row}, k hàng {k_row})"
         return True, "ok"
-
-class VisibleBoard:
-    """Tracks actual piece positions for 'see-all' mode.
-    
-    Maintains a 90-cell board with actual piece types (from raw_face).
-    Used to generate standard xiangqi FEN for the engine.
-    """
-    TYPE_TO_FEN = {1: 'k', 2: 'a', 3: 'b', 4: 'r', 5: 'c', 6: 'n', 7: 'p'}
-    
-    def __init__(self):
-        self.cells = ['.'] * 90  # 90 positions, '.' = empty
-        self.side_to_move = 'w'
-        
-    def reset(self):
-        self.cells = ['.'] * 90
-        self.side_to_move = 'w'
-    
-    def set_from_pieces(self, pieces, flip):
-        """Set board from START_MATCH pieces list.
-        pieces: [(sid, face, position, is_open), ...]
-        flip: board flip state (from XiangqiBoardTracker)
-        """
-        self.cells = ['.'] * 90
-        for sid, face, position, is_open in pieces:
-            if position < 0 or position >= 90:
-                continue
-            if len(face) >= 2:
-                color = face[0]  # 'r' or 'b'
-                piece_type = int(face[1])
-                fen_char = self.TYPE_TO_FEN.get(piece_type, '?')
-                if color == 'r':
-                    fen_char = fen_char.upper()
-                self.cells[position] = fen_char
-    
-    def apply_move(self, source_pos, target_pos):
-        """Move a piece from source to target."""
-        if 0 <= source_pos < 90 and 0 <= target_pos < 90:
-            self.cells[target_pos] = self.cells[source_pos]
-            self.cells[source_pos] = '.'
-    
-    def flip_side(self):
-        self.side_to_move = 'b' if self.side_to_move == 'w' else 'w'
-    
-    def to_fen(self, flip=False):
-        """Convert to FEN string.
-        Server positions: pos = row * 9 + col (row 0 = RED bottom, row 9 = BLACK top)
-        FEN format: row 9 first (top), row 0 last (bottom)
-        """
-        rows = []
-        for board_row in range(9, -1, -1):  # row 9 → row 0
-            fen_str = ""
-            empty = 0
-            for col in range(9):
-                pos = board_row * 9 + col
-                piece = self.cells[pos] if 0 <= pos < 90 else '.'
-                if piece == '.':
-                    empty += 1
-                else:
-                    if empty > 0:
-                        fen_str += str(empty)
-                        empty = 0
-                    fen_str += piece
-            if empty > 0:
-                fen_str += str(empty)
-            rows.append(fen_str)
-        return '/'.join(rows) + ' ' + self.side_to_move + ' - - 0 1'
-
 
 class JqeEngine:
     def __init__(self):
@@ -764,6 +698,18 @@ class JqeEngine:
     def alive(self):
         return self.proc is not None and self.proc.poll() is None
 
+    def _position_accepted(self, timeout=1.0):
+        """Chờ phản hồi của lệnh 'position'. True nếu jqe không báo lỗi."""
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            with self._lines_lock:
+                for l in self._stdout_lines:
+                    if l.startswith("info string bad"):
+                        print(f"[ENGINE] ❌ {l}")
+                        return False
+            time.sleep(0.02)
+        return True
+
     def restart(self):
         if self._restart_count >= MAX_ENGINE_RESTARTS_PER_GAME:
             print(f"[ENGINE] ❌ Quá {MAX_ENGINE_RESTARTS_PER_GAME} restarts")
@@ -783,14 +729,27 @@ class JqeEngine:
             self._stdout_lines.clear()
         try:
             # ★ Use "position startpos moves ..." — format chung của hệ Pikafish-jieqi
-            # Token move mang reveal suffix (a3a4P, b2b9Pr) → jqe tự track urn/BAG
-            # và dùng xác suất urn cho chance nodes khi đi quân úp.
+            # Token move mang reveal suffix (a3a4P) và victim suffix khi ăn quân
+            # úp (b2b9Cp) → jqe tự track urn/BAG, chance nodes dùng xác suất urn.
             cmd = "position startpos"
             if moves:
                 cmd += " moves " + " ".join(moves)
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
+            # jqe GIỮ position cũ nếu history sai → engine sẽ đi sai nước.
+            # Vì vậy kiểm tra phản hồi 'bad move/bad fen' và fallback bỏ suffix.
+            if not self._position_accepted():
+                stripped = [re.sub(r'([a-i]\d[a-i]\d)([a-zA-Z])', r'\1', m) for m in moves]
+                print("[ENGINE] ⚠️ jqe từ chối history (bad move) — thử lại bỏ victim suffix")
+                with self.engine_lock:
+                    self.proc.stdin.write("position startpos")
+                    if stripped:
+                        self.proc.stdin.write(" moves " + " ".join(stripped))
+                    self.proc.stdin.write("\n")
+                    self.proc.stdin.flush()
+                self._position_accepted()
+            with self.engine_lock:
                 self.proc.stdin.write("go infinite\n")
                 self.proc.stdin.flush()
         except Exception as e:
@@ -834,7 +793,6 @@ class JieqiCupBot:
     def __init__(self):
         self.conn = Conn()
         self.board = XiangqiBoardTracker()
-        self.visible_board = VisibleBoard()
         self.engine = None
         self.ws = None
         self.connected = False
@@ -853,7 +811,6 @@ class JieqiCupBot:
         self.bet_amts = []
         self._resolved_bet_id = None
         self._bet_amts_loaded = False
-        self.fixed_pawn_positions = set()
         self.last_action_timestamp = time.time()
         self.last_recv_timestamp = time.time()
         self.slot_players = {}
@@ -943,7 +900,6 @@ class JieqiCupBot:
         self._bet_amts_loaded = False
         self._resolved_bet_id = None
         self.bet_amts = []
-        self.fixed_pawn_positions = set()
         self._thinking = False
         self._played_this_turn = False
         self.board.reset()
@@ -1281,7 +1237,6 @@ class JieqiCupBot:
         self._last_move_uci = None
         self._last_move_time = 0.0
         self.board.reset()
-        self.fixed_pawn_positions.clear()
         self.board.is_playing = True
         self.in_game = True
         self._joining_table = False
@@ -1338,18 +1293,13 @@ class JieqiCupBot:
                     print(f"[FEN] ❌ Still bad ({_why2})")
                     self.board.flip = not self.board.flip
             self.board.set_base(_built_fen, 'w')
-            
-            # ★ Set visible board from actual piece data
-            self.visible_board.set_from_pieces(board_pieces, self.board.flip)
-            self.visible_board.side_to_move = 'w'
+
+            # NOTE (nghiên cứu WS dump 2026-11): raw_face của quân úp
+            # (is_open=0) là id THEO Ô chuẩn, KHÔNG phải định danh thật —
+            # server không leak deal. Chỉ tướng là mở sẵn lúc đầu.
             for sid, face, position, is_open in board_pieces:
                 if not is_open and 0 <= position < 90:
                     self.board.dark_positions.add(position)
-                piece_type = int(face[1]) if len(face) > 1 else 0
-                if piece_type == 7 and position not in STANDARD_PAWN_POSITIONS:
-                    self.fixed_pawn_positions.add(position)
-            if self.fixed_pawn_positions:
-                print(f"[GAME] 🛡️ {len(self.fixed_pawn_positions)} locked pawns")
             self.board.revealed_chars = []
             print(f"[FEN] 📋 {self.board.start_fen}")
             print(f"[START] BAG={self.board.bag_string()}")
@@ -1377,8 +1327,9 @@ class JieqiCupBot:
         for sid, face, position, is_open in pieces:
             if position < 0 or position >= 90: continue
             fen_row, col = self.board.pos_to_rc(position)
-            # ★ SEE ALL PIECES: use decoded face for ALL pieces (even hidden)
-            # Server sends raw_face = actual piece type for every piece
+            # ★ face của quân úp = quân theo Ô chuẩn (không phải quân thật).
+            # Server chỉ tiết lộ định danh thật qua MOVE reveal khi quân di
+            # chuyển. FEN này chỉ dùng cho sanity-check hướng bàn + log.
             if len(face) > 1:
                 color = face[0]; piece_type = int(face[1])
                 type_to_fen = {1: 'k', 2: 'a', 3: 'b', 4: 'r',
@@ -1440,26 +1391,46 @@ class JieqiCupBot:
                         f"dump={event_source}->{event_target}"
                     )
                 mover_dark = source_pos in self.board.dark_positions
+                victim_dark = (target_pos in self.board.dark_positions
+                               and target_pos != source_pos)
                 is_flip_move = (source_pos == target_pos)
-                revealed_char = event.get("revealed_piece")
-                if revealed_char in ('k', 'K'):
-                    revealed_char = None
-                if revealed_char and not (mover_dark or is_flip_move):
-                    print(f"[MOVE] parser reveal on open square: {revealed_char}", flush=True)
-                    revealed_char = None
+                # ★ Reveal pairs từ ws dump: payload = <n>(sid,face){n}
+                #   pair[0] = quân di chuyển lật (nếu nó úp)
+                #   pair[1] = quân úp BỊ ĂN (server tiết lộ cho bên ăn)
+                # jqe token: b2b9Cp = lật C + ăn được p (thường=đen)
+                pairs = event.get("reveal_pairs") or []
+
+                def _pair_char(i):
+                    if i >= len(pairs):
+                        return None
+                    ch = pairs[i].get("piece")
+                    return None if ch in (None, "k", "K") else ch
+
+                if mover_dark or is_flip_move:
+                    mover_char = _pair_char(0)
+                    victim_char = _pair_char(1) if victim_dark else None
+                else:
+                    # Quân di chuyển đã mở: pair duy nhất (nếu có) là victim
+                    mover_char = None
+                    victim_char = _pair_char(0) if victim_dark else None
+                # Fallback parser cũ nếu ws_frame_dump chưa có reveal_pairs
+                if mover_char is None and not pairs and (mover_dark or is_flip_move):
+                    mover_char = event.get("revealed_piece")
+                    if mover_char in ("k", "K"):
+                        mover_char = None
+                if mover_char and not (mover_dark or is_flip_move):
+                    print(f"[MOVE] parser reveal on open square: {mover_char}", flush=True)
+                    mover_char = None
                 self.board.dark_positions.discard(source_pos)
                 self.board.dark_positions.discard(target_pos)
-                full_uci = engine_move + (revealed_char or "")
+                suffix = (mover_char or "") + (victim_char or "")
+                full_uci = engine_move + suffix
                 now = time.time()
                 if (self._last_move_uci == full_uci
                         and (now - self._last_move_time) < MOVE_DEDUP_WINDOW):
                     self._move_skip_count += 1
                     return
-                self.board.record_move(engine_move, revealed_char)
-                # ★ Update visible board
-                src_pos, tgt_pos = self.board.engine_move_to_pos(engine_move)
-                self.visible_board.apply_move(src_pos, tgt_pos)
-                self.visible_board.flip_side()
+                self.board.record_move(engine_move, suffix)
                 self._last_move_uci = full_uci
                 self._last_move_time = now
                 self._played_this_turn = False
@@ -1560,7 +1531,6 @@ class JieqiCupBot:
 
         self.board.is_playing = False
         self.board.is_my_turn = False
-        self.fixed_pawn_positions.clear()
         self.board.reset()
         self.in_game = True
         self._joining_table = False
@@ -1697,7 +1667,7 @@ class JieqiCupBot:
                     self._joining_table = False
                     self._bet_amts_loaded = False
                     self._resolved_bet_id = None
-                    self.bet_amts = []; self.fixed_pawn_positions = set()
+                    self.bet_amts = []
                     self._thinking = False; self._played_this_turn = False
                     self.board.reset()
                     if not self.connect():

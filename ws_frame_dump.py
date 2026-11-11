@@ -205,11 +205,16 @@ def decode_face_byte(raw: int) -> str | None:
 
 
 def parse_move(data: bytes) -> dict[str, Any]:
-    """Parse MOVE, including the revealed piece, from the wire payload.
+    """Parse MOVE, including reveals, from the wire payload.
 
-    GameVH puts the revealed SID at payload byte 2 when payload byte 0 is
-    non-zero. Keep this rule here so the bot does not independently interpret
-    raw WebSocket bytes.
+    Payload structure (nghiên cứu WS dump 2026-11):
+        <n> (sid, face){n}
+    - n=0: nước thường, không reveal gì (payload '00')
+    - n=1: 1 pair — quân di chuyển lật (mover) HOẶC quân úp bị ăn
+      (khi quân di chuyển đã mở)
+    - n=2: 2 pair — pair[0] = quân di chuyển lật, pair[1] = quân úp BỊ ĂN
+      (server tiết lộ định danh thật cho bên ăn — jqe dialect 'b2b9Cp')
+    Ví dụ thực: '02292acfc4' = b2b9C ăn quân úp b9 (victim = good đen).
     """
     cmd, off = command_id(data)
     if cmd != "MOVE":
@@ -217,6 +222,17 @@ def parse_move(data: bytes) -> dict[str, Any]:
     source, off = u8(data, off)
     target, off = u8(data, off)
     payload = data[off:]
+    n = payload[0] if payload else 0
+    reveal_pairs = []
+    if 0 < n <= (len(payload) - 1) // 2:
+        for i in range(n):
+            sid_b, face_b = payload[1 + 2 * i], payload[2 + 2 * i]
+            reveal_pairs.append({
+                "sid_byte": sid_b,
+                "face_byte": face_b,
+                "sid_decoded": decode_piece_id(sid_b),
+                "piece": decode_face_byte(face_b),
+            })
     reveal_byte = payload[2] if len(payload) >= 3 and payload[0] > 0 else None
     return {
         "command": "MOVE",
@@ -225,6 +241,7 @@ def parse_move(data: bytes) -> dict[str, Any]:
         "payload_hex": payload.hex(),
         "reveal_byte": reveal_byte,
         "revealed_piece": decode_face_byte(reveal_byte) if reveal_byte is not None else None,
+        "reveal_pairs": reveal_pairs,
     }
 
 
