@@ -1,0 +1,77 @@
+name: Engine Match (jqe vs JieqiCore)
+
+# Đo sức mạnh thực tế giữa engine MỚI (jqe) và engine CŨ (JieqiCore) mà
+# arena14.py dùng trước đây. Dùng referee + seeded deals của jqe: mỗi bên chỉ
+# nhận thông tin của mình (giống hệt ván thật), deal cố định, đổi màu theo cặp.
+
+on:
+  workflow_dispatch:
+    inputs:
+      games:
+        description: 'Số ván (làm tròn thành cặp, mỗi cặp đổi màu)'
+        required: false
+        default: '50'
+      movetime:
+        description: 'Thời gian mỗi nước (ms)'
+        required: false
+        default: '1000'
+
+env:
+  JQE_COMMIT: 331a6e612a038c4a04cf980f7b9482910fd50078
+
+jobs:
+  match:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential cmake
+
+    - name: Build JieqiCore (engine cũ, commit đã pin trong jieqi-core.ref)
+      run: bash build_engine_jieqi_core.sh
+
+    - name: Build jqe + referee (devinokeefe/jieqi)
+      run: |
+        mkdir jqe-engine
+        curl -sL "https://github.com/devinokeefe/jieqi/archive/${JQE_COMMIT}.tar.gz" \
+          | tar xz -C jqe-engine --strip-components=1
+        cmake -S jqe-engine -B jqe-engine/build/release \
+          -DCMAKE_BUILD_TYPE=Release -DJIEQI_SANITIZERS=OFF -DBUILD_TESTING=OFF
+        cmake --build jqe-engine/build/release -j"$(nproc)"
+        cmake -S jqe-engine/engine -B jqe-engine/engine/build -DCMAKE_BUILD_TYPE=Release
+        cmake --build jqe-engine/engine/build -j"$(nproc)" --target jqe
+
+    - name: Verify binaries
+      run: |
+        ./jieqi-core <<< 'uci
+        quit' | head -3
+        ls -la jqe-engine/engine/build/jqe jqe-engine/build/release/lib/libjieqi_rules.so
+
+    - name: Chạy đấu jqe vs JieqiCore
+      run: |
+        cd jqe-engine
+        python3 engine/tools/match.py \
+          --engine jqe="$PWD/engine/build/jqe" \
+          --engine jieqicore="$GITHUB_WORKSPACE/jieqi-core" \
+          --games "${{ github.event.inputs.games }}" \
+          --movetime "${{ github.event.inputs.movetime }}" \
+          --hash 64 --threads 1 --concurrency 4 \
+          --out engine/runs/match
+
+    - name: Upload kết quả
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: engine-match-result
+        path: jqe-engine/engine/runs/match
+        retention-days: 30
