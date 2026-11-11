@@ -52,8 +52,8 @@ jobs:
 
     - name: Run jqe bot
       env:
-        JQE_ENGINE: ./jqe-engine/engine/build/jqe
-        JQE_NET: ./jqe-it014.jqn
+        JQE_ENGINE: ${{ github.workspace }}/jqe-engine/engine/build/jqe
+        JQE_NET: ${{ github.workspace }}/jqe-it014.jqn
       run: python3 -u arena14.py
       timeout-minutes: 340
 

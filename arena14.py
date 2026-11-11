@@ -610,7 +610,10 @@ class JqeEngine:
         self._lines_lock = threading.Lock()
         for path in JQE_BINARY_CANDIDATES:
             if path and os.path.isfile(path) and os.access(path, os.X_OK):
-                self.binary_path = path
+                # abspath bắt buộc: Popen đặt cwd = dirname(binary) nên path
+                # tương đối sẽ bị resolve SAI trong cwd mới (bug thấy trên CI:
+                # './jqe-engine/.../jqe' không tìm thấy dù file tồn tại)
+                self.binary_path = os.path.abspath(path)
                 break
         if not self.binary_path:
             print(f"[ENGINE] ❌ Không tìm thấy jqe binary. Đã thử: {[p for p in JQE_BINARY_CANDIDATES if p]}")
@@ -618,7 +621,7 @@ class JqeEngine:
             return
         for path in JQE_NET_CANDIDATES:
             if path and os.path.isfile(path):
-                self.net_path = path
+                self.net_path = os.path.abspath(path)
                 break
         if not self.net_path:
             print("[ENGINE] ⚠️ KHÔNG tìm thấy net (jqe-it014.jqn) — jqe sẽ dùng eval thủ công YẾU HƠN NHIỀU!")
