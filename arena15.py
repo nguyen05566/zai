@@ -777,21 +777,17 @@ class MistboardJieqiEngine:
             with self.engine_lock:
                 self.proc.stdin.write(cmd + "\n")
                 self.proc.stdin.flush()
-                self.proc.stdin.write("go infinite\n")
+            # ★ Dùng go movetime thay go infinite + stop: engine tự hoàn thành
+            # toàn bộ iteration trước khi trả bestmove, không bị chặt nhánh.
+            with self.engine_lock:
+                self.proc.stdin.write(f"go movetime {movetime_ms}\n")
                 self.proc.stdin.flush()
         except Exception as e:
             print(f"[ENGINE] Send error: {e}")
             self._engine_searching = False
             return None
-        time.sleep(movetime_ms / 1000.0)
-        try:
-            with self.engine_lock:
-                self.proc.stdin.write("stop\n")
-                self.proc.stdin.flush()
-        except Exception:
-            pass
         t0 = time.time()
-        timeout = 2.0
+        timeout = max(movetime_ms / 1000.0 + 2.0, 5.0)
         while time.time() - t0 < timeout:
             if self._latest_bestmove:
                 self._engine_searching = False
@@ -1600,10 +1596,26 @@ class JieqiCupBot:
         if remain < 4.0:
             print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
             return
-        movetime_ms = 3000
+        # ★ Adaptive Time Control: phân bổ thời gian theo giai đoạn ván cờ.
+        uci_count = len(self.board.uci_moves)
+        pieces_remaining = max(0, 32 - len(self.board.revealed_chars))
+        if uci_count < 12 or pieces_remaining > 24:
+            movetime_ms = 1200   # khai cuộc: ít tính, tiết kiệm thời gian
+            phase = "KHAI CUỘC"
+        elif uci_count < 40 or pieces_remaining > 12:
+            movetime_ms = 2800   # trung cuộc: tính sát cuộc
+            phase = "TRUNG CUỘC"
+        else:
+            movetime_ms = 1600   # tàn cuộc: ít quân, tính nhanh
+            phase = "TÀN CUỘC"
+        # Đảm bảo không vượt quá remaining time (reserve 1.5s cho overhead/WS)
+        movetime_ms = min(movetime_ms, int((remain - 1.5) * 1000))
+        if movetime_ms < 500:
+            print(f"[TURN] Sắp hết giờ (remain={remain:.1f}s) — bỏ lượt")
+            return
         fen, moves = self.board.get_current_fen()
         print(f"[ENGINE-IN] FEN: {fen[:80]}...", flush=True)
-        print(f"[ENGINE-IN] moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
+        print(f"[ENGINE-IN] {phase} | moves({len(moves)}), movetime={movetime_ms}ms, remain={remain:.1f}s",
               flush=True)
         raw = self.engine.get_best_move(fen, moves, movetime_ms=movetime_ms)
         if not raw:
