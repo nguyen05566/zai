@@ -877,7 +877,7 @@ class JieqiCupBot:
             on_error=self._on_error, on_close=self._on_close,
             header={"Origin": "https://gamevh.net"})
         self.ws_thread = threading.Thread(
-            target=lambda: self.ws.run_forever(ping_interval=30, ping_timeout=None),
+            target=lambda: self.ws.run_forever(ping_interval=None, ping_timeout=None),
             daemon=True)
         self.ws_thread.start()
         for _ in range(25):
@@ -1659,8 +1659,10 @@ class JieqiCupBot:
     def start_keep_alive(self):
         def loop():
             while self.connected:
-                time.sleep(10)
-                if self.connected: self.send_message("PING")
+                time.sleep(20)
+                if self.connected:
+                    self.send_message("PONG")
+                    print("[KEEPALIVE] client PONG -> server")
         threading.Thread(target=loop, daemon=True).start()
 
     def run(self):
